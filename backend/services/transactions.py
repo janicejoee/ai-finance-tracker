@@ -1,5 +1,4 @@
 import time
-import json
 from datetime import datetime, timezone
 
 from plaid.model.transactions_sync_request import TransactionsSyncRequest
