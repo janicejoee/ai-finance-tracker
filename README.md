@@ -1,21 +1,18 @@
 # Expenses Tracker
 
-A personal finance tracker that links bank accounts via [Plaid](https://plaid.com), stores transactions in [Supabase](https://supabase.com), and uses Claude to categorize spending.
+A personal finance app that links a bank account via [Plaid](https://plaid.com) and fetches transactions from Plaid.
 
 ## Features
 
 - Connect a bank account through Plaid Link
-- Sync transactions and account balances
-- AI-powered expense categorization (Claude)
-- Dashboard with balance summary, spending charts, and separated income/expense lists
+- Fetch and list transactions from Plaid
 
 ## Project structure
 
 ```
 expenses_tracker/
-├── backend/          # Flask API (Plaid, Supabase, Anthropic)
+├── backend/          # Flask API (Plaid, Supabase)
 │   ├── server.py
-│   ├── start.sh
 │   ├── requirements.txt
 │   └── services/
 └── frontend/         # React + Vite + Tailwind
@@ -28,7 +25,6 @@ expenses_tracker/
 - Node.js 18+
 - [Plaid](https://dashboard.plaid.com/) account (Sandbox is fine for development)
 - [Supabase](https://supabase.com/) project
-- [Anthropic](https://console.anthropic.com/) API key (for categorization)
 
 ## Setup
 
@@ -57,9 +53,6 @@ SUPABASE_SERVICE_ROLE_KEY=
 
 # App
 DEFAULT_USER_ID=          # UUID for your user row in Supabase
-ANTHROPIC_API_KEY=
-ANTHROPIC_CATEGORIZE_MODEL=claude-haiku-4-5
-ANTHROPIC_INSIGHTS_MODEL=claude-haiku-4-5
 
 # Optional
 PORT=8000
@@ -82,28 +75,7 @@ Create these tables in your Supabase project:
 | `user_id` | uuid | |
 | `plaid_item_id` | text | unique, Plaid item ID |
 | `access_token` | text | |
-| `transactions_cursor` | text | Plaid sync cursor |
-
-**`transactions`**
-
-| Column | Type | Notes |
-|--------|------|-------|
-| `plaid_transaction_id` | text | unique |
-| `plaid_item_id` | uuid | FK → `plaid_items.id` |
-| `plaid_account_id` | text | |
-| `name` | text | |
-| `merchant_name` | text | nullable |
-| `logo_url` | text | nullable, Plaid icon URL (merchant logo, or `personal_finance_category_icon_url` fallback) |
-| `amount` | numeric | Plaid: positive = expense, negative = income |
-| `date` | date | |
-| `iso_currency_code` | text | nullable |
-| `pending` | boolean | |
-| `plaid_category_primary` | text | nullable |
-| `plaid_category_detailed` | text | nullable |
-| `category_id` | uuid | nullable, FK → `expense_categories.id` |
-| `entry_type` | text | `'income'` or `'expense'` |
-| `categorized_at` | timestamptz | nullable |
-| `deleted_at` | timestamptz | nullable, soft delete |
+| `transactions_cursor` | text | |
 
 Set `DEFAULT_USER_ID` in `.env` to match a user UUID in your app (auth is not implemented yet — a single hardcoded user is used).
 
@@ -118,7 +90,7 @@ cd backend
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-./start.sh
+python3 server.py
 ```
 
 ### Frontend (port 3000)
@@ -137,9 +109,8 @@ Open [http://localhost:3000](http://localhost:3000). The frontend proxies `/api`
 |--------|-------|-------------|
 | `POST` | `/api/create_link_token` | Start Plaid Link |
 | `POST` | `/api/set_access_token` | Exchange public token after Link |
-| `GET` | `/api/transactions` | Sync from Plaid, return stored transactions |
-| `GET` | `/api/balance` | Account balances from Plaid |
-| `POST` | `/api/categorize` | AI-categorize uncategorized transactions |
+| `GET` | `/api/link_status` | Whether a bank account is already linked |
+| `GET` | `/api/transactions` | Fetch transactions from Plaid |
 | `POST` | `/api/link_exit_error` | Log Plaid Link errors |
 
 ## Plaid Sandbox test credentials
@@ -158,7 +129,7 @@ See [Plaid Sandbox docs](https://plaid.com/docs/sandbox/) for more test users.
 
 **Backend won't start / `python` not found**
 
-Use `python3` or run via `./start.sh`, which prefers the local `.venv`.
+Activate the venv first (`source .venv/bin/activate`), then run `python3 server.py`.
 
 **Frontend can't reach API (`ECONNREFUSED`)**
 
@@ -167,10 +138,6 @@ Make sure the backend is running on port 8000 before starting the frontend.
 **`No user ID found`**
 
 Set `DEFAULT_USER_ID` in `backend/.env`.
-
-**Categorize returns nothing**
-
-Only expense transactions (`amount > 0`) with `category_id IS NULL` are sent to the AI. `entry_type` is always derived from amount in application code, not by the AI.
 
 **Link errors**
 
