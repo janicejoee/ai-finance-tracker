@@ -217,6 +217,38 @@ section {
   min-width: 6.5rem;
 }
 
+.category-groups {
+  list-style: none;
+  margin: 0.35rem 0 0.5rem;
+  padding: 0;
+  border-top: 1px solid #eee;
+}
+
+.category-groups li {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 0.75rem;
+  align-items: center;
+  padding: 0.55rem 0;
+  border-bottom: 1px solid #f0f0f0;
+  font-size: 0.9rem;
+}
+
+.category-groups li:last-child {
+  border-bottom: 0;
+}
+
+.category-groups .name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.category-groups .count {
+  color: #777;
+  font-variant-numeric: tabular-nums;
+}
+
 .label {
   display: block;
   margin-bottom: 0.1rem;

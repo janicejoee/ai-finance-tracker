@@ -7,6 +7,7 @@ type Transaction = {
   amount: number;
   date: string;
   approved: boolean;
+  plaidCategory: string | null;
 };
 
 function errorText(data: unknown, fallback: string) {
@@ -30,6 +31,8 @@ function parseTransactions(data: unknown): Transaction[] {
       amount: Number(row.amount),
       date: String(row.date ?? "").slice(0, 10),
       approved: row.approved === true,
+      plaidCategory:
+        typeof row.plaid_category_primary === "string" ? row.plaid_category_primary : null,
     };
   });
 }
@@ -44,6 +47,42 @@ function formatMoney(amount: number) {
 function formatAmount(amount: number) {
   const formatted = formatMoney(Math.abs(amount));
   return amount > 0 ? `−${formatted}` : `+${formatted}`;
+}
+
+const TRANSFER_CATEGORIES = new Set([
+  "TRANSFER_IN",
+  "TRANSFER_OUT",
+  "LOAN_PAYMENTS",
+]);
+
+type Kind = "expense" | "income" | "transfer";
+
+type CategoryGroup = {
+  category: string;
+  count: number;
+  total: number;
+};
+
+function isTransfer(tx: Transaction) {
+  return tx.plaidCategory !== null && TRANSFER_CATEGORIES.has(tx.plaidCategory);
+}
+
+function kindOf(tx: Transaction): Kind {
+  if (isTransfer(tx)) return "transfer";
+  if (tx.amount < 0) return "income";
+  return "expense";
+}
+
+function categoryLabel(tx: Transaction) {
+  return tx.plaidCategory || "OTHER";
+}
+
+function formatCategory(category: string) {
+  return category
+    .split("_")
+    .filter(Boolean)
+    .map((word) => word.charAt(0) + word.slice(1).toLowerCase())
+    .join(" ");
 }
 
 function currentMonthKey() {
@@ -77,10 +116,27 @@ function summarizeMonth(rows: Transaction[], month: string) {
   let income = 0;
   for (const tx of rows) {
     if (!tx.approved || tx.date.slice(0, 7) !== month) continue;
-    if (tx.amount > 0) expenses += tx.amount;
-    else if (tx.amount < 0) income += Math.abs(tx.amount);
+    const kind = kindOf(tx);
+    if (kind === "expense") expenses += tx.amount;
+    else if (kind === "income") income += Math.abs(tx.amount);
   }
   return { expenses, income };
+}
+
+function expenseGroups(rows: Transaction[]): CategoryGroup[] {
+  const byCategory = new Map<string, CategoryGroup>();
+  for (const tx of rows) {
+    if (kindOf(tx) !== "expense") continue;
+    const category = categoryLabel(tx);
+    const group = byCategory.get(category);
+    if (group) {
+      group.count += 1;
+      group.total += tx.amount;
+    } else {
+      byCategory.set(category, { category, count: 1, total: tx.amount });
+    }
+  }
+  return [...byCategory.values()].sort((a, b) => b.total - a.total);
 }
 
 function formatMonth(month: string) {
@@ -103,6 +159,9 @@ function MonthlySummary({
 }) {
   const bounds = monthBounds(rows);
   const totals = summarizeMonth(rows, month);
+  const groups = expenseGroups(
+    rows.filter((tx) => tx.approved && tx.date.slice(0, 7) === month),
+  );
 
   return (
     <section>
@@ -137,6 +196,17 @@ function MonthlySummary({
           <span className="amount in">{formatMoney(totals.income)}</span>
         </p>
       </div>
+      {groups.length > 0 && (
+        <ul className="category-groups">
+          {groups.map((group) => (
+            <li key={group.category}>
+              <span className="name">{formatCategory(group.category)}</span>
+              <span className="count">{group.count}</span>
+              <span className="amount out">{formatMoney(group.total)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
     </section>
   );
 }
@@ -161,7 +231,10 @@ function UpdatesFeed({
             <li key={tx.id || `${tx.date}-${tx.name}`}>
               <div>
                 <p className="name">{tx.name}</p>
-                <span className="date">{tx.date}</span>
+                <span className="date">
+                  {tx.date}
+                  {tx.plaidCategory ? ` · ${formatCategory(tx.plaidCategory)}` : ""}
+                </span>
               </div>
               <span className={tx.amount > 0 ? "amount out" : "amount in"}>
                 {formatAmount(tx.amount)}
@@ -209,7 +282,10 @@ function TransactionTable({
               <tr key={tx.id || `${tx.date}-${tx.name}`}>
                 <td>
                   <p className="name">{tx.name}</p>
-                  <span className="date">{tx.date}</span>
+                  <span className="date">
+                    {tx.date}
+                    {tx.plaidCategory ? ` · ${formatCategory(tx.plaidCategory)}` : ""}
+                  </span>
                 </td>
                 <td className={tx.amount > 0 ? "amount out" : "amount in"}>
                   {formatAmount(tx.amount)}
@@ -352,8 +428,9 @@ export default function App() {
   const [month, setMonth] = useState(currentMonthKey);
   const waiting = transactions.filter((tx) => !tx.approved);
   const approved = transactions.filter((tx) => tx.approved && tx.date.slice(0, 7) === month);
-  const income = approved.filter((tx) => tx.amount < 0);
-  const expenses = approved.filter((tx) => tx.amount > 0);
+  const income = approved.filter((tx) => kindOf(tx) === "income");
+  const expenses = approved.filter((tx) => kindOf(tx) === "expense");
+  const transfers = approved.filter((tx) => kindOf(tx) === "transfer");
 
   const loadTransactions = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
@@ -591,6 +668,13 @@ export default function App() {
                 title="Expenses"
                 rows={expenses}
                 empty="No expenses yet."
+                savingIds={savingIds}
+                onToggle={toggleApproved}
+              />
+              <TransactionTable
+                title="Transfers"
+                rows={transfers}
+                empty="No transfers yet."
                 savingIds={savingIds}
                 onToggle={toggleApproved}
               />

@@ -104,7 +104,7 @@ def add_transactions(access_token, added, modified, removed, cursor):
 def list_transactions(plaid_item_id):
     result = (
         supabase_client.from_('transactions')
-        .select('plaid_transaction_id, name, merchant_name, amount, date, approved')
+        .select('plaid_transaction_id, name, merchant_name, amount, date, approved, plaid_category_primary')
         .eq('plaid_item_id', plaid_item_id)
         .is_('deleted_at', 'null')
         .order('date', desc=True)
