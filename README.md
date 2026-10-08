@@ -51,9 +51,6 @@ PLAID_COUNTRY_CODES=US
 SUPABASE_URL=
 SUPABASE_SERVICE_ROLE_KEY=
 
-# App
-DEFAULT_USER_ID=          # UUID for your user row in Supabase
-
 # Optional
 PORT=8000
 PLAID_REDIRECT_URI=       # only needed for OAuth institutions
@@ -77,7 +74,7 @@ Create these tables in your Supabase project:
 | `access_token` | text | |
 | `transactions_cursor` | text | |
 
-Set `DEFAULT_USER_ID` in `.env` to match a user UUID in your app (auth is not implemented yet — a single hardcoded user is used).
+Sign in on the app with an email that already exists in Supabase Authentication → Users. The API uses that user's id.
 
 ## Running locally
 
@@ -107,11 +104,14 @@ Open [http://localhost:3000](http://localhost:3000). The frontend proxies `/api`
 
 | Method | Route | Description |
 |--------|-------|-------------|
+| `POST` | `/api/login` | Sign in with an email from Supabase Auth users |
+| `POST` | `/api/signup` | Create a Supabase Auth user for a new email and sign in |
+| `POST` | `/api/logout` | Clear the session |
+| `GET` | `/api/me` | Current signed-in email |
 | `POST` | `/api/create_link_token` | Start Plaid Link |
 | `POST` | `/api/set_access_token` | Exchange public token after Link |
 | `GET` | `/api/link_status` | Whether a bank account is already linked |
 | `GET` | `/api/transactions` | Fetch transactions from Plaid |
-| `POST` | `/api/link_exit_error` | Log Plaid Link errors |
 
 ## Plaid Sandbox test credentials
 
@@ -135,9 +135,9 @@ Activate the venv first (`source .venv/bin/activate`), then run `python3 server.
 
 Make sure the backend is running on port 8000 before starting the frontend.
 
-**`No user ID found`**
+**`Sign in required` or `No account for that email`**
 
-Set `DEFAULT_USER_ID` in `backend/.env`.
+Use an email that already exists under Supabase Authentication → Users.
 
 **Link errors**
 
