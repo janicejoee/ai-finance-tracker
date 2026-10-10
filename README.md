@@ -1,148 +1,66 @@
 # Expenses Tracker
 
-A personal finance app that links a bank account via [Plaid](https://plaid.com) and fetches transactions from Plaid.
+**Nothing counts until you've looked at it.**
 
-## Features
+Most budgeting apps take your bank feed on faith. This one treats every transaction as a suspect. It waits in an inbox until you give it a category and check the box. Only then does it count toward the month.
 
-- Connect a bank account through Plaid Link
-- Fetch and list transactions from Plaid
+Changed your mind? Uncheck it, and it walks back to the inbox.
 
-## Project structure
+## The two screens
 
-```
-expenses_tracker/
-├── backend/          # Flask API (Plaid, Supabase)
-│   ├── server.py
-│   ├── requirements.txt
-│   └── services/
-└── frontend/         # React + Vite + Tailwind
-    └── src/
-```
+**New Transactions** is the inbox. It shows everything you haven't approved yet, with a badge counting what's left. Clear it and you get: *You're all caught up.*
 
-## Prerequisites
+**Home** is one month at a time. At the top: what you spent, what came in, and which categories took the money, biggest first. Below that, income, expenses, and transfers each get their own list. Step back through earlier months with Prev and Next.
 
-- Python 3.8+
-- Node.js 18+
-- [Plaid](https://dashboard.plaid.com/) account (Sandbox is fine for development)
-- [Supabase](https://supabase.com/) project
+## The journey of a coffee
 
-## Setup
-
-### 1. Clone the repo
-
-```bash
-git clone <your-repo-url>
-cd expenses_tracker
+```mermaid
+flowchart LR
+    Bank -->|Plaid sync| API[Flask API]
+    API -->|sort + upsert| DB[(Supabase)]
+    DB --> Inbox[New Transactions]
+    Inbox -->|you approve| Month[Home]
 ```
 
-### 2. Configure environment variables
+You buy a $5 latte. Here's what happens to it.
 
-Create `backend/.env` with:
+1. **It stays pending.** The bank shows the charge as pending, and the app pretends it doesn't exist. Pending amounts can still change, and nobody wants to file a charge twice.
+2. **It posts.** When you open the app or hit Refresh, the Flask API asks Plaid what has changed since last time. Plaid answers from a saved *cursor* on your bank link, so a sync only brings what was added, changed, or removed, never the whole history again.
+3. **It gets sorted.** Before the API saves it, it reads Plaid's category and labels the latte an expense, income, or transfer (rules below). The row is upserted on Plaid's transaction id, so syncing twice never creates a duplicate.
+4. **It gets a category.** On insert, a database trigger gives it a default category, which you can change from a dropdown.
+5. **You approve it.** Check the box, and it lands in the month.
 
-```env
-# Plaid
-PLAID_CLIENT_ID=
-PLAID_SECRET=
-PLAID_ENV=sandbox
-PLAID_PRODUCTS=transactions
-PLAID_COUNTRY_CODES=US
+If the bank cancels the charge, Plaid reports a removal. The row is soft-deleted and vanishes from both screens.
 
-# Supabase
-SUPABASE_URL=
-SUPABASE_SERVICE_ROLE_KEY=
+## The rules of the sort
 
-# Optional
-PORT=8000
-PLAID_REDIRECT_URI=       # only needed for OAuth institutions
-```
+Banks are messy, so the classifier runs a short list of rules, in this order:
 
-Get Plaid keys from the [Plaid Dashboard](https://dashboard.plaid.com/developers/keys).
+| If the transaction is… | It becomes |
+|---|---|
+| Named like a card payment thank-you | **Transfer** |
+| Money sent through an app such as Zelle | **Expense** |
+| Money received through an app | **Income** |
+| An account transfer, card or loan payment, or investment | **Transfer** |
+| Anything else Plaid marks as income | **Income** |
+| Everything else | **Expense** |
 
-> Never commit `.env` or expose service role keys. The root `.gitignore` already excludes `.env`.
+The first rule exists because some banks file a card payment as a purchase. Left alone, paying off your card would look like spending the same money twice.
 
-### 3. Database (Supabase)
+Transfers get their own list and stay out of both totals. A refund stays an expense; the money simply comes back in.
 
-Create these tables in your Supabase project:
+## Yours vs. the bank's
 
-**`plaid_items`**
+Every row has two kinds of fields.
 
-| Column | Type | Notes |
-|--------|------|-------|
-| `id` | uuid | PK |
-| `user_id` | uuid | |
-| `plaid_item_id` | text | unique, Plaid item ID |
-| `access_token` | text | |
-| `transactions_cursor` | text | |
+- **The bank's:** name, amount, date, and Plaid's category labels. Any sync can rewrite these.
+- **Yours:** whether it's approved, and which category it's in. The sync payload leaves both out, so a later update can correct an amount without wiping your decisions.
 
-Sign in on the app with an email that already exists in Supabase Authentication → Users. The API uses that user's id.
+## Under the hood
 
-## Running locally
+- **React + Vite** is the screen you see, and it only talks to the API.
+- **Flask** is the only process that holds Plaid or Supabase credentials. It exchanges Plaid Link's public token for an access token, runs the sync, and stores your session.
+- **Plaid** connects the bank and supplies its transactions through `/transactions/sync`.
+- **Supabase** holds accounts (through Auth), bank links, categories, and transactions. The API uses the service role, so the browser never touches the database.
 
-Start the backend and frontend in separate terminals.
-
-### Backend (port 8000)
-
-```bash
-cd backend
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-python3 server.py
-```
-
-### Frontend (port 3000)
-
-```bash
-cd frontend
-npm install
-npm start
-```
-
-Open [http://localhost:3000](http://localhost:3000). The frontend proxies `/api` requests to the backend.
-
-## API endpoints
-
-| Method | Route | Description |
-|--------|-------|-------------|
-| `POST` | `/api/login` | Sign in with an email from Supabase Auth users |
-| `POST` | `/api/signup` | Create a Supabase Auth user for a new email and sign in |
-| `POST` | `/api/logout` | Clear the session |
-| `GET` | `/api/session` | Signed-in email, or 401 if nobody is signed in |
-| `GET` | `/api/bank` | Whether a bank account is already linked |
-| `POST` | `/api/bank/link-token` | Start Plaid Link |
-| `POST` | `/api/bank/connect` | Save the bank connection after Link |
-| `GET` | `/api/transactions` | Fetch transactions from Plaid |
-
-## Plaid Sandbox test credentials
-
-In Sandbox, use:
-
-- **Username:** `user_good`
-- **Password:** `pass_good`
-- **2FA code (if prompted):** `1234`
-
-For more realistic transaction data, try **First Platypus Bank** with username `user_transactions_dynamic`.
-
-See [Plaid Sandbox docs](https://plaid.com/docs/sandbox/) for more test users.
-
-## Troubleshooting
-
-**Backend won't start / `python` not found**
-
-Activate the venv first (`source .venv/bin/activate`), then run `python3 server.py`.
-
-**Frontend can't reach API (`ECONNREFUSED`)**
-
-Make sure the backend is running on port 8000 before starting the frontend.
-
-**`Sign in required` or `No account for that email`**
-
-Use an email that already exists under Supabase Authentication → Users.
-
-**Link errors**
-
-Check backend logs or the [Plaid Dashboard activity logs](https://dashboard.plaid.com/activity/logs).
-
-## License
-
-Private / personal project — add a license if you plan to open-source it.
+Sign-in uses just an email. It's a personal tool, not a bank.

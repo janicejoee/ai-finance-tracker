@@ -11,7 +11,6 @@ supabase_client = create_client(
     os.environ["SUPABASE_SERVICE_ROLE_KEY"],
 )
 
-
 TRANSFER_PRIMARIES = {'TRANSFER_IN', 'TRANSFER_OUT', 'EQUITY_AND_INVESTMENTS'}
 EXPENSE_DETAILED = {'TRANSFER_OUT_TRANSFER_OUT_FROM_APPS'}   # Zelle etc. sent out
 INCOME_DETAILED = {'TRANSFER_IN_TRANSFER_IN_FROM_APPS'}      # Zelle etc. received
