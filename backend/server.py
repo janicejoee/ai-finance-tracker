@@ -4,6 +4,7 @@ load_dotenv()
 
 import json
 import os
+import uuid
 
 from flask import Flask, request, jsonify, session
 import plaid
@@ -17,6 +18,8 @@ from services.db import (
     supabase_client,
     create_user_by_email,
     find_user_by_email,
+    get_category,
+    list_categories,
     list_transactions,
     update_transaction,
 )
@@ -28,8 +31,7 @@ app.secret_key = os.environ['SUPABASE_SERVICE_ROLE_KEY']
 
 PLAID_PRODUCTS = os.getenv('PLAID_PRODUCTS', 'transactions').split(',')
 PLAID_COUNTRY_CODES = os.getenv('PLAID_COUNTRY_CODES', 'US').split(',')
-ALLOWED_FIELDS_UPDATE = {'approved'}  # later: 'category_id', 'entry_type', ...
-
+ALLOWED_FIELDS_UPDATE = {'approved', 'category_id'}
 
 def empty_to_none(field):
     value = os.getenv(field)
@@ -115,16 +117,16 @@ def logout():
     return jsonify({'ok': True})
 
 
-@app.route('/api/me', methods=['GET'])
-def me():
+@app.route('/api/session', methods=['GET'])
+def current_session():
     email = session.get('email')
     if not session.get('user_id') or not email:
         return jsonify({'error': 'Sign in required'}), 401
     return jsonify({'email': email})
 
 
-@app.route('/api/link_status', methods=['GET'])
-def link_status():
+@app.route('/api/bank', methods=['GET'])
+def bank_status():
     user_id, error = require_user_id()
     if error:
         return error
@@ -136,8 +138,8 @@ def link_status():
     return jsonify({'linked': linked})
 
 
-@app.route('/api/create_link_token', methods=['POST'])
-def create_link_token():
+@app.route('/api/bank/link-token', methods=['POST'])
+def bank_link_token():
     user_id, error = require_user_id()
     if error:
         return error
@@ -159,8 +161,8 @@ def create_link_token():
     return jsonify(response.to_dict())
 
 
-@app.route('/api/set_access_token', methods=['POST'])
-def set_access_token():
+@app.route('/api/bank/connect', methods=['POST'])
+def connect_bank():
     public_token = request.form['public_token']
     user_id, error = require_user_id()
     if error:
@@ -191,6 +193,14 @@ def set_access_token():
     })
 
 
+@app.route('/api/categories', methods=['GET'])
+def categories():
+    _, error = require_user_id()
+    if error:
+        return error
+    return jsonify(list_categories())
+
+
 @app.route('/api/transactions', methods=['GET'])
 def transactions():
     plaid_item_id, access_token, error = require_plaid_item()
@@ -200,6 +210,13 @@ def transactions():
     get_transactions(access_token)
     return jsonify(list_transactions(plaid_item_id))
 
+def parse_category_id(value):
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError
+    return str(uuid.UUID(value))
+
 @app.route('/api/transactions/<plaid_transaction_id>', methods=['PATCH'])
 def patch_transaction(plaid_transaction_id):
     plaid_item_id, _, error = require_plaid_item()
@@ -208,6 +225,14 @@ def patch_transaction(plaid_transaction_id):
 
     data = request.get_json(silent=True) or {}
     fields = {key: data[key] for key in ALLOWED_FIELDS_UPDATE if key in data}
+    if 'category_id' in fields:
+        try:
+            category_id = parse_category_id(fields['category_id'])
+        except (ValueError, TypeError):
+            return jsonify({'error': 'category_id must be a category id'}), 400
+        if category_id is not None and not get_category(category_id):
+            return jsonify({'error': 'Unknown category'}), 400
+        fields['category_id'] = category_id
     if not fields:
         return jsonify({'error': 'No fields to update'}), 400
 

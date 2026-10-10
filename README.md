@@ -107,10 +107,10 @@ Open [http://localhost:3000](http://localhost:3000). The frontend proxies `/api`
 | `POST` | `/api/login` | Sign in with an email from Supabase Auth users |
 | `POST` | `/api/signup` | Create a Supabase Auth user for a new email and sign in |
 | `POST` | `/api/logout` | Clear the session |
-| `GET` | `/api/me` | Current signed-in email |
-| `POST` | `/api/create_link_token` | Start Plaid Link |
-| `POST` | `/api/set_access_token` | Exchange public token after Link |
-| `GET` | `/api/link_status` | Whether a bank account is already linked |
+| `GET` | `/api/session` | Signed-in email, or 401 if nobody is signed in |
+| `GET` | `/api/bank` | Whether a bank account is already linked |
+| `POST` | `/api/bank/link-token` | Start Plaid Link |
+| `POST` | `/api/bank/connect` | Save the bank connection after Link |
 | `GET` | `/api/transactions` | Fetch transactions from Plaid |
 
 ## Plaid Sandbox test credentials

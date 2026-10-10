@@ -1,13 +1,22 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { usePlaidLink } from "react-plaid-link";
 
+type Kind = "expense" | "income" | "transfer";
+
+type Category = {
+  id: string;
+  name: string;
+};
+
 type Transaction = {
   id: string;
   name: string;
   amount: number;
   date: string;
   approved: boolean;
-  plaidCategory: string | null;
+  entryType: Kind;
+  categoryId: string | null;
+  categoryName: string | null;
 };
 
 function errorText(data: unknown, fallback: string) {
@@ -21,6 +30,20 @@ function errorText(data: unknown, fallback: string) {
   return body.error_message || fallback;
 }
 
+function parseKind(value: unknown): Kind {
+  if (value === "income" || value === "transfer") return value;
+  return "expense";
+}
+
+function parseCategories(data: unknown): Category[] {
+  if (!Array.isArray(data)) return [];
+  return data.flatMap((item) => {
+    const row = item as Record<string, unknown>;
+    if (typeof row.id !== "string" || typeof row.name !== "string") return [];
+    return [{ id: row.id, name: row.name }];
+  });
+}
+
 function parseTransactions(data: unknown): Transaction[] {
   if (!Array.isArray(data)) return [];
   return data.map((tx) => {
@@ -31,8 +54,9 @@ function parseTransactions(data: unknown): Transaction[] {
       amount: Number(row.amount),
       date: String(row.date ?? "").slice(0, 10),
       approved: row.approved === true,
-      plaidCategory:
-        typeof row.plaid_category_primary === "string" ? row.plaid_category_primary : null,
+      entryType: parseKind(row.entry_type),
+      categoryId: typeof row.category_id === "string" ? row.category_id : null,
+      categoryName: typeof row.category_name === "string" ? row.category_name : null,
     };
   });
 }
@@ -49,39 +73,25 @@ function formatAmount(amount: number) {
   return amount > 0 ? `−${formatted}` : `+${formatted}`;
 }
 
-const TRANSFER_CATEGORIES = new Set([
-  "TRANSFER_IN",
-  "TRANSFER_OUT",
-  "LOAN_PAYMENTS",
-]);
-
-type Kind = "expense" | "income" | "transfer";
-
 type CategoryGroup = {
   category: string;
   count: number;
   total: number;
 };
 
-function isTransfer(tx: Transaction) {
-  return tx.plaidCategory !== null && TRANSFER_CATEGORIES.has(tx.plaidCategory);
-}
-
 function kindOf(tx: Transaction): Kind {
-  if (isTransfer(tx)) return "transfer";
-  if (tx.amount < 0) return "income";
-  return "expense";
+  return tx.entryType;
 }
 
 function categoryLabel(tx: Transaction) {
-  return tx.plaidCategory || "OTHER";
+  return tx.categoryName || "Uncategorized";
 }
 
 function formatCategory(category: string) {
   return category
-    .split("_")
+    .split(/[_\s]+/)
     .filter(Boolean)
-    .map((word) => word.charAt(0) + word.slice(1).toLowerCase())
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
     .join(" ");
 }
 
@@ -211,14 +221,56 @@ function MonthlySummary({
   );
 }
 
+function CategoryEditor({
+  transaction,
+  disabled,
+  categories,
+  onSave,
+}: {
+  transaction: Transaction;
+  disabled: boolean;
+  categories: Category[];
+  onSave: (transaction: Transaction, categoryId: string | null) => void;
+}) {
+  const known = categories.some((category) => category.id === transaction.categoryId);
+  const value = transaction.categoryId && known ? transaction.categoryId : "";
+
+  return (
+    <div className="category-editor">
+      <select
+        className="category-input"
+        disabled={disabled || !transaction.id}
+        aria-label={`Category for ${transaction.name}`}
+        value={value}
+        onChange={(event) => {
+          const next = event.target.value || null;
+          if (next === (transaction.categoryId ?? null)) return;
+          onSave(transaction, next);
+        }}
+      >
+        <option value="">Uncategorized</option>
+        {categories.map((category) => (
+          <option key={category.id} value={category.id}>
+            {category.name}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
 function UpdatesFeed({
   rows,
+  categories,
   savingIds,
   onToggle,
+  onCategory,
 }: {
   rows: Transaction[];
+  categories: Category[];
   savingIds: ReadonlySet<string>;
   onToggle: (transaction: Transaction) => void;
+  onCategory: (transaction: Transaction, categoryId: string | null) => void;
 }) {
   return (
     <section>
@@ -231,10 +283,13 @@ function UpdatesFeed({
             <li key={tx.id || `${tx.date}-${tx.name}`}>
               <div>
                 <p className="name">{tx.name}</p>
-                <span className="date">
-                  {tx.date}
-                  {tx.plaidCategory ? ` · ${formatCategory(tx.plaidCategory)}` : ""}
-                </span>
+                <span className="date">{tx.date}</span>
+                <CategoryEditor
+                  transaction={tx}
+                  disabled={savingIds.has(tx.id)}
+                  categories={categories}
+                  onSave={onCategory}
+                />
               </div>
               <span className={tx.amount > 0 ? "amount out" : "amount in"}>
                 {formatAmount(tx.amount)}
@@ -258,14 +313,18 @@ function TransactionTable({
   title,
   rows,
   empty,
+  categories,
   savingIds,
   onToggle,
+  onCategory,
 }: {
   title: string;
   rows: Transaction[];
   empty: string;
+  categories: Category[];
   savingIds: ReadonlySet<string>;
   onToggle: (transaction: Transaction) => void;
+  onCategory: (transaction: Transaction, categoryId: string | null) => void;
 }) {
   return (
     <section>
@@ -282,10 +341,13 @@ function TransactionTable({
               <tr key={tx.id || `${tx.date}-${tx.name}`}>
                 <td>
                   <p className="name">{tx.name}</p>
-                  <span className="date">
-                    {tx.date}
-                    {tx.plaidCategory ? ` · ${formatCategory(tx.plaidCategory)}` : ""}
-                  </span>
+                  <span className="date">{tx.date}</span>
+                  <CategoryEditor
+                    transaction={tx}
+                    disabled={savingIds.has(tx.id)}
+                    categories={categories}
+                    onSave={onCategory}
+                  />
                 </td>
                 <td className={tx.amount > 0 ? "amount out" : "amount in"}>
                   {formatAmount(tx.amount)}
@@ -386,7 +448,7 @@ function Connect({
     token,
     receivedRedirectUri: oauth ? window.location.href : undefined,
     onSuccess: async (publicToken) => {
-      const response = await fetch("/api/set_access_token", {
+      const response = await fetch("/api/bank/connect", {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: new URLSearchParams({ public_token: publicToken }),
@@ -421,6 +483,7 @@ export default function App() {
   const [linked, setLinked] = useState<boolean | null>(null);
   const [linkToken, setLinkToken] = useState<string | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
   const [savingIds, setSavingIds] = useState<ReadonlySet<string>>(new Set());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -431,7 +494,6 @@ export default function App() {
   const income = approved.filter((tx) => kindOf(tx) === "income");
   const expenses = approved.filter((tx) => kindOf(tx) === "expense");
   const transfers = approved.filter((tx) => kindOf(tx) === "transfer");
-
   const loadTransactions = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
     setError(null);
@@ -455,7 +517,7 @@ export default function App() {
     let cancelled = false;
     (async () => {
       try {
-        const response = await fetch("/api/me");
+        const response = await fetch("/api/session");
         const data = await response.json().catch(() => null);
         if (cancelled || !response.ok || !data?.email) return;
         setEmail(String(data.email));
@@ -483,7 +545,7 @@ export default function App() {
     let cancelled = false;
     (async () => {
       try {
-        const statusRes = await fetch("/api/link_status");
+        const statusRes = await fetch("/api/bank");
         const status = await statusRes.json();
         if (cancelled) return;
         if (statusRes.ok && status.linked) {
@@ -491,7 +553,7 @@ export default function App() {
           return;
         }
 
-        const tokenRes = await fetch("/api/create_link_token", { method: "POST" });
+        const tokenRes = await fetch("/api/bank/link-token", { method: "POST" });
         const tokenData = await tokenRes.json();
         if (cancelled) return;
         if (!tokenRes.ok || !tokenData.link_token) {
@@ -521,6 +583,7 @@ export default function App() {
     setLinked(null);
     setLinkToken(null);
     setTransactions([]);
+    setCategories([]);
     setSavingIds(new Set());
     setPage("home");
     setMonth(currentMonthKey());
@@ -574,6 +637,76 @@ export default function App() {
       });
     }
   }
+
+  async function saveCategory(transaction: Transaction, categoryId: string | null) {
+    if (!transaction.id || savingIds.has(transaction.id)) return;
+    const previous = {
+      categoryId: transaction.categoryId,
+      categoryName: transaction.categoryName,
+    };
+    const categoryName =
+      categories.find((category) => category.id === categoryId)?.name ?? null;
+    setSavingIds((current) => new Set(current).add(transaction.id));
+    setTransactions((current) =>
+      current.map((row) =>
+        row.id === transaction.id ? { ...row, categoryId, categoryName } : row,
+      ),
+    );
+    setError(null);
+    try {
+      const response = await fetch(
+        `/api/transactions/${encodeURIComponent(transaction.id)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ category_id: categoryId }),
+        },
+      );
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        setTransactions((current) =>
+          current.map((row) =>
+            row.id === transaction.id ? { ...row, ...previous } : row,
+          ),
+        );
+        setError(errorText(data, "Could not update category"));
+      }
+    } catch {
+      setTransactions((current) =>
+        current.map((row) =>
+          row.id === transaction.id ? { ...row, ...previous } : row,
+        ),
+      );
+      setError("Backend not reachable");
+    } finally {
+      setSavingIds((current) => {
+        const next = new Set(current);
+        next.delete(transaction.id);
+        return next;
+      });
+    }
+  }
+
+  useEffect(() => {
+    if (!email) return;
+    const controller = new AbortController();
+    (async () => {
+      try {
+        const response = await fetch("/api/categories", { signal: controller.signal });
+        const data = await response.json();
+        if (controller.signal.aborted) return;
+        if (!response.ok) {
+          setError(errorText(data, "Could not load categories"));
+          return;
+        }
+        setCategories(parseCategories(data));
+      } catch (err) {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        setError("Backend not reachable");
+      }
+    })();
+    return () => controller.abort();
+  }, [email]);
 
   useEffect(() => {
     if (!linked) return;
@@ -661,30 +794,38 @@ export default function App() {
                 title="Income"
                 rows={income}
                 empty="No income yet."
+                categories={categories}
                 savingIds={savingIds}
                 onToggle={toggleApproved}
+                onCategory={saveCategory}
               />
               <TransactionTable
                 title="Expenses"
                 rows={expenses}
                 empty="No expenses yet."
+                categories={categories}
                 savingIds={savingIds}
                 onToggle={toggleApproved}
+                onCategory={saveCategory}
               />
               <TransactionTable
                 title="Transfers"
                 rows={transfers}
                 empty="No transfers yet."
+                categories={categories}
                 savingIds={savingIds}
                 onToggle={toggleApproved}
+                onCategory={saveCategory}
               />
             </>
           )}
           {page === "updates" && (
             <UpdatesFeed
               rows={waiting}
+              categories={categories}
               savingIds={savingIds}
               onToggle={toggleApproved}
+              onCategory={saveCategory}
             />
           )}
         </>

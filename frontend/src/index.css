@@ -156,6 +156,35 @@ nav.pages button.active {
   border-bottom: 1px solid #eee;
 }
 
+.category-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-top: 0.35rem;
+  max-width: 14rem;
+}
+
+.category-input {
+  display: block;
+  width: 100%;
+  padding: 0.3rem 0.45rem;
+  font: inherit;
+  font-size: 0.8rem;
+  color: #444;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  background: #fff;
+}
+
+select.category-input {
+  cursor: pointer;
+}
+
+.category-input:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .feed li:last-child {
   border-bottom: 0;
 }
