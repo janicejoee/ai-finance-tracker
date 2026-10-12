@@ -697,13 +697,15 @@ function UpdatesFeed({
               <span className={tx.amount > 0 ? "amount out" : "amount in"}>
                 {formatAmount(tx.amount)}
               </span>
-              <input
-                type="checkbox"
-                checked={tx.approved}
-                disabled={!tx.id || savingIds.has(tx.id)}
-                aria-label={`Include ${tx.name}`}
-                onChange={() => onToggle(tx)}
-              />
+              <label className="include">
+                <input
+                  type="checkbox"
+                  checked={tx.approved}
+                  disabled={!tx.id || savingIds.has(tx.id)}
+                  aria-label={`Include ${tx.name}`}
+                  onChange={() => onToggle(tx)}
+                />
+              </label>
             </li>
           ))}
         </ul>
@@ -778,13 +780,15 @@ function TransactionTable({
                   {formatAmount(tx.amount)}
                 </td>
                 <td className="check">
-                  <input
-                    type="checkbox"
-                    checked={tx.approved}
-                    disabled={!tx.id || savingIds.has(tx.id)}
-                    aria-label={`${tx.approved ? "Remove" : "Include"} ${tx.name}`}
-                    onChange={() => onToggle(tx)}
-                  />
+                  <label className="include">
+                    <input
+                      type="checkbox"
+                      checked={tx.approved}
+                      disabled={!tx.id || savingIds.has(tx.id)}
+                      aria-label={`${tx.approved ? "Remove" : "Include"} ${tx.name}`}
+                      onChange={() => onToggle(tx)}
+                    />
+                  </label>
                 </td>
               </tr>
             ))}
@@ -1021,7 +1025,7 @@ function Connect({
   }, [oauth, ready, open]);
 
   return (
-    <button type="button" onClick={() => open()} disabled={!ready}>
+    <button type="button" className="connect" onClick={() => open()} disabled={!ready}>
       {ready ? "Connect bank" : "Loading…"}
     </button>
   );

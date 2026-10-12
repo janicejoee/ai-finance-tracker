@@ -2,6 +2,10 @@
   box-sizing: border-box;
 }
 
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
 body {
   margin: 0;
   font-family: system-ui, sans-serif;
@@ -12,7 +16,11 @@ body {
 main {
   max-width: 40rem;
   margin: 0 auto;
-  padding: 2rem 1rem 4rem;
+  padding:
+    max(1.25rem, env(safe-area-inset-top))
+    max(1rem, env(safe-area-inset-right))
+    max(2.5rem, env(safe-area-inset-bottom))
+    max(1rem, env(safe-area-inset-left));
 }
 
 h1 {
@@ -172,10 +180,14 @@ button:disabled {
 }
 
 nav.pages {
+  position: sticky;
+  top: 0;
+  z-index: 5;
   display: flex;
   gap: 0.25rem;
   margin: 0 0 1rem;
   border-bottom: 1px solid #e4e4e4;
+  background: #f4f4f2;
 }
 
 nav.pages button {
@@ -217,11 +229,15 @@ nav.pages .ask-nav-icon {
 
 .feed li {
   display: grid;
-  grid-template-columns: 1fr auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 0.75rem;
-  align-items: center;
+  align-items: start;
   padding: 0.7rem 0;
   border-bottom: 1px solid #eee;
+}
+
+.feed li > div {
+  min-width: 0;
 }
 
 .category-editor {
@@ -229,7 +245,8 @@ nav.pages .ask-nav-icon {
   flex-direction: column;
   gap: 0.3rem;
   margin-top: 0.35rem;
-  max-width: 14rem;
+  max-width: min(14rem, 100%);
+  min-width: 0;
 }
 
 .category-input {
@@ -245,6 +262,8 @@ nav.pages .ask-nav-icon {
 }
 
 select.category-input {
+  width: 100%;
+  max-width: 100%;
   cursor: pointer;
 }
 
@@ -376,38 +395,55 @@ section {
 
 table {
   width: 100%;
+  table-layout: fixed;
   border-collapse: collapse;
 }
 
 td {
   padding: 0.7rem 0;
   border-bottom: 1px solid #eee;
-  vertical-align: middle;
+  vertical-align: top;
+}
+
+td:first-child {
+  min-width: 0;
 }
 
 tr:last-child td {
   border-bottom: 0;
 }
 
-tr:hover td {
-  background: #fafafa;
+@media (hover: hover) {
+  tr:hover td {
+    background: #fafafa;
+  }
 }
 
 td.amount {
-  width: 1%;
-  padding-right: 1.25rem;
+  width: 6.75rem;
+  padding-right: 0.65rem;
   text-align: right;
   white-space: nowrap;
 }
 
 td.check {
-  width: 1.25rem;
-  padding-left: 0.15rem;
+  width: 2.75rem;
+  padding-left: 0;
   text-align: right;
+}
+
+.include {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.25rem;
+  min-height: 1.25rem;
+  cursor: pointer;
 }
 
 .name {
   margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .date {
@@ -524,7 +560,184 @@ form.ask-form {
   background: #fff;
 }
 
-@media (max-width: 30rem) {
+@media (max-width: 40rem) {
+  main {
+    padding:
+      max(1rem, env(safe-area-inset-top))
+      max(0.85rem, env(safe-area-inset-right))
+      max(1.75rem, env(safe-area-inset-bottom))
+      max(0.85rem, env(safe-area-inset-left));
+  }
+
+  .top h1 {
+    font-size: 1.25rem;
+  }
+
+  .account span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  nav.pages {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    margin-inline: -0.85rem;
+    padding-inline: 0.35rem;
+    background: #f4f4f2;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  nav.pages button {
+    flex: 1 1 auto;
+    justify-content: center;
+    min-height: 2.75rem;
+    padding: 0.65rem 0.45rem;
+    font-size: 0.875rem;
+    white-space: nowrap;
+  }
+
+  button,
+  .month-nav button {
+    min-height: 2.75rem;
+  }
+
+  button.text {
+    min-height: 2.5rem;
+    padding: 0.35rem 0.2rem;
+  }
+
+  button.connect,
+  form.ask-form > button {
+    width: 100%;
+  }
+
+  .toolbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: stretch;
+  }
+
+  .toolbar > button {
+    min-height: 2.75rem;
+  }
+
+  form {
+    max-width: none;
+    width: 100%;
+  }
+
+  .actions {
+    width: 100%;
+  }
+
+  .actions button {
+    flex: 1 1 8rem;
+    min-height: 2.75rem;
+  }
+
+  .month-nav {
+    gap: 0.5rem;
+  }
+
+  .month-nav h2 {
+    flex: 1;
+    min-width: 0;
+    font-size: 1rem;
+    text-align: center;
+  }
+
+  .month-nav button {
+    min-width: 0;
+    padding-inline: 0.8rem;
+  }
+
+  .pair {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.6rem;
+  }
+
+  .pair p {
+    min-width: 0;
+    margin: 0;
+    padding: 0.65rem 0.7rem;
+    background: #f7f7f5;
+    border-radius: 8px;
+  }
+
+  section {
+    padding: 0.8rem 0.7rem 0.3rem;
+  }
+
+  .category-editor {
+    max-width: 100%;
+  }
+
+  .category-input {
+    min-height: 2.75rem;
+    padding: 0.55rem 0.6rem;
+    font-size: 1rem;
+  }
+
+  input,
+  select,
+  textarea {
+    font-size: 1rem;
+  }
+
+  .feed li {
+    gap: 0.45rem 0.55rem;
+  }
+
+  .row-actions {
+    gap: 1.1rem;
+  }
+
+  td.amount {
+    width: 6.25rem;
+    padding-right: 0.35rem;
+  }
+
+  td.check {
+    width: 2.75rem;
+  }
+
+  .include {
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+    margin: -0.7rem -0.15rem -0.7rem 0;
+  }
+
+  .modal-backdrop {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .modal {
+    width: 100%;
+    max-height: calc(100dvh - env(safe-area-inset-top) - 0.5rem);
+    border-radius: 16px 16px 0 0;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  form.manual-entry .actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .ask-thread {
+    max-height: min(22rem, 48dvh);
+    padding: 0.7rem;
+  }
+
+  .ask-bubble {
+    max-width: 100%;
+  }
+
   .manual-entry-fields {
     grid-template-columns: 1fr;
   }
