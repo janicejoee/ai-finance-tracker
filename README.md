@@ -2,7 +2,7 @@
 
 Expenses Tracker turns your bank feed into a month you've actually reviewed.
 
-Link a bank account, and new transactions land in an inbox. Give each one a category and check it off. Only approved transactions count toward the month, so the totals reflect what you've looked at, not whatever the bank sent.
+Link a bank account, and new transactions land in an inbox. Give each one a category and check it off. Only approved transactions count toward the month, so the totals reflect what you've looked at, not whatever the bank sent. On the Ask page, an AI assistant answers spending questions from those approved expenses—totals, categories, merchants, and period comparisons.
 
 ## How it works
 
@@ -14,6 +14,8 @@ Link a bank account, and new transactions land in an inbox. Give each one a cate
 
 **Reviewing.** You can use the tracker before linking a bank. Add a transaction by hand from Home or New Transactions; it stays unapproved until you check it off, same as a bank row. New Transactions lists everything not yet approved. Home shows one month at a time: total spending, total income, spending by category, and separate lists for income, expenses, and transfers. Connect a bank when you want synced rows; Refresh syncs only when a bank is linked.
 
+**Asking.** The Ask tab talks to Claude through the Flask API. The model never queries the database itself; it calls server-side tools that return approved expense totals, merchant matches, transaction lists, and period comparisons for the signed-in user only. Income, transfers, and unapproved inbox rows are excluded. The Anthropic API key and Supabase service-role key stay on the server.
+
 ## Stack
 
 | Layer | Tools |
@@ -22,18 +24,20 @@ Link a bank account, and new transactions land in an inbox. Give each one a cate
 | Backend | Flask |
 | Auth & data | Supabase Auth, Postgres |
 | Banking | Plaid (Link, Transactions Sync) |
+| AI chat | Anthropic Claude (tool calling via `/api/chat`) |
 
 ## Project layout
 
 ```
 backend/                Flask API (port 8000)
   server.py             Routes for auth, bank linking, categories, and transactions
+  chat/                 Spending chatbot (Claude tools + /api/chat)
   services/
     plaid_client.py     Plaid client configuration
     transactions.py     Cursor-based transaction sync
     db.py               Supabase persistence and transaction classification
 frontend/               React app (port 3000)
-  src/App.tsx           Sign-in, bank link, inbox, and monthly view
+  src/App.tsx           Sign-in, bank link, inbox, monthly view, and Ask chat
 ```
 
 In development, Vite proxies `/api` to the Flask server.
@@ -57,6 +61,8 @@ npm start
 
 Open [http://localhost:3000](http://localhost:3000). Create an account with your email and connect a bank. In Sandbox, sign in to the bank with `user_good` / `pass_good`. For more realistic data, use `user_transactions_dynamic`.
 
+For Ask, set `ANTHROPIC_API_KEY` in the backend environment (along with `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`).
+
 ## API
 
 Routes other than login and signup require a signed-in Flask session cookie.
@@ -75,3 +81,4 @@ Routes other than login and signup require a signed-in Flask session cookie.
 | `POST` | `/api/transactions` | Create a manual transaction (`name`, `amount`, `date`, `entry_type`, optional `category_id`) |
 | `PATCH` | `/api/transactions/<plaid_transaction_id>` | Update `approved`, `category_id`, `name`, `date`, `entry_type`, and/or `amount` |
 | `DELETE` | `/api/transactions/<plaid_transaction_id>` | Soft-delete a transaction |
+| `POST` | `/api/chat` | Ask a spending question (`question`, optional `history`); answers from approved expenses only |

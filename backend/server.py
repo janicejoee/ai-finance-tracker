@@ -16,6 +16,7 @@ from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchan
 from plaid.model.link_token_create_request import LinkTokenCreateRequest
 from plaid.model.link_token_create_request_user import LinkTokenCreateRequestUser
 
+from chat.routes import chat_bp
 from services.db import (
     ENTRY_TYPES,
     supabase_client,
@@ -35,6 +36,7 @@ from services.transactions import get_transactions
 
 app = Flask(__name__)
 app.secret_key = os.environ['SUPABASE_SERVICE_ROLE_KEY']
+app.register_blueprint(chat_bp)
 
 PLAID_PRODUCTS = os.getenv('PLAID_PRODUCTS', 'transactions').split(',')
 PLAID_COUNTRY_CODES = os.getenv('PLAID_COUNTRY_CODES', 'US').split(',')

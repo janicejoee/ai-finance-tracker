@@ -858,6 +858,131 @@ function Login({ onLoggedIn }: { onLoggedIn: (email: string) => void }) {
   );
 }
 
+type ChatMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
+function AskChat({
+  onUnauthorized,
+}: {
+  onUnauthorized: () => void;
+}) {
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
+  const [chatError, setChatError] = useState<string | null>(null);
+  const [retryQuestion, setRetryQuestion] = useState<string | null>(null);
+
+  async function sendQuestion(question: string) {
+    const trimmed = question.trim();
+    if (!trimmed || sending) return;
+
+    const history = messages.slice(-10);
+    setSending(true);
+    setChatError(null);
+    setRetryQuestion(null);
+    setDraft("");
+    setMessages((current) => [...current, { role: "user", content: trimmed }]);
+
+    try {
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question: trimmed, history }),
+      });
+      const data = await response.json().catch(() => null);
+      if (response.status === 401) {
+        onUnauthorized();
+        return;
+      }
+      if (!response.ok) {
+        setMessages((current) => current.slice(0, -1));
+        setDraft(trimmed);
+        setRetryQuestion(trimmed);
+        setChatError(errorText(data, "Could not get an answer"));
+        return;
+      }
+      const answer =
+        data && typeof data === "object" && typeof (data as { answer?: unknown }).answer === "string"
+          ? (data as { answer: string }).answer
+          : "";
+      setMessages((current) => [
+        ...current,
+        { role: "assistant", content: answer || "No answer returned." },
+      ]);
+    } catch {
+      setMessages((current) => current.slice(0, -1));
+      setDraft(trimmed);
+      setRetryQuestion(trimmed);
+      setChatError("Backend not reachable");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  function onSubmit(event: FormEvent) {
+    event.preventDefault();
+    void sendQuestion(draft);
+  }
+
+  return (
+    <section className="ask">
+      <p className="ask-intro">
+        Ask about your approved expenses—totals, categories, merchants, or comparisons.
+      </p>
+      <div className="ask-thread" aria-live="polite">
+        {messages.length === 0 && !sending && (
+          <p className="ask-empty">Try “How much did I spend this month?”</p>
+        )}
+        {messages.map((message, index) => (
+          <div
+            key={`${message.role}-${index}`}
+            className={`ask-bubble ${message.role}`}
+          >
+            <span className="ask-role">
+              {message.role === "user" ? "You" : "Assistant"}
+            </span>
+            <p>{message.content}</p>
+          </div>
+        ))}
+        {sending && <p className="ask-loading">Thinking…</p>}
+      </div>
+      {chatError && (
+        <div className="ask-error">
+          <p className="error">{chatError}</p>
+          {retryQuestion && (
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => void sendQuestion(retryQuestion)}
+              disabled={sending}
+            >
+              Retry
+            </button>
+          )}
+        </div>
+      )}
+      <form className="ask-form" onSubmit={onSubmit}>
+        <label>
+          Question
+          <textarea
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            rows={3}
+            maxLength={1000}
+            placeholder="How much did I spend on dining last month?"
+            disabled={sending}
+          />
+        </label>
+        <button type="submit" disabled={sending || !draft.trim()}>
+          {sending ? "Asking…" : "Ask"}
+        </button>
+      </form>
+    </section>
+  );
+}
+
 function Connect({
   token,
   onLinked,
@@ -912,7 +1037,7 @@ export default function App() {
   const [savingIds, setSavingIds] = useState<ReadonlySet<string>>(new Set());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [page, setPage] = useState<"home" | "updates">("home");
+  const [page, setPage] = useState<"home" | "updates" | "ask">("home");
   const [month, setMonth] = useState(currentMonthKey);
   const [editing, setEditing] = useState<Transaction | null>(null);
   const waiting = transactions.filter((tx) => !tx.approved);
@@ -1230,24 +1355,47 @@ export default function App() {
               New Transactions
               {waiting.length > 0 && <span className="badge">{waiting.length}</span>}
             </button>
-          </nav>
-          <div className="toolbar">
-            <ManualEntryForm
-              categories={categories}
-              onCreated={(transaction) =>
-                setTransactions((current) => [transaction, ...current])
-              }
-              onError={setError}
-            />
             <button
               type="button"
-              className="secondary"
-              onClick={() => loadTransactions()}
-              disabled={loading}
+              className={page === "ask" ? "active" : undefined}
+              aria-current={page === "ask" ? "page" : undefined}
+              onClick={() => setPage("ask")}
             >
-              {loading ? "Loading…" : "Refresh"}
+              <svg
+                className="ask-nav-icon"
+                width="14"
+                height="14"
+                viewBox="0 0 16 16"
+                aria-hidden="true"
+                focusable="false"
+              >
+                <path
+                  fill="currentColor"
+                  d="M8 1.2l.9 2.7c.2.5.6.9 1.1 1.1L12.8 6l-2.8.9c-.5.2-.9.6-1.1 1.1L8 10.8l-.9-2.8c-.2-.5-.6-.9-1.1-1.1L3.2 6l2.8-.9c.5-.2.9-.6 1.1-1.1L8 1.2zm5.2 7.1l.5 1.5c.1.3.3.5.6.6l1.5.5-1.5.5c-.3.1-.5.3-.6.6l-.5 1.5-.5-1.5c-.1-.3-.3-.5-.6-.6L10.6 11l1.5-.5c.3-.1.5-.3.6-.6l.5-1.5z"
+                />
+              </svg>
+              Ask
             </button>
-          </div>
+          </nav>
+          {page !== "ask" && (
+            <div className="toolbar">
+              <ManualEntryForm
+                categories={categories}
+                onCreated={(transaction) =>
+                  setTransactions((current) => [transaction, ...current])
+                }
+                onError={setError}
+              />
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => loadTransactions()}
+                disabled={loading}
+              >
+                {loading ? "Loading…" : "Refresh"}
+              </button>
+            </div>
+          )}
           {editing && (
             <EditTransactionForm
               key={editing.id}
@@ -1319,6 +1467,7 @@ export default function App() {
               onDelete={deleteTransaction}
             />
           )}
+          {page === "ask" && <AskChat onUnauthorized={signOut} />}
         </>
       )}
     </main>
