@@ -56,6 +56,63 @@ form {
   max-width: 20rem;
 }
 
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.modal {
+  width: min(100%, 28rem);
+  max-height: calc(100vh - 2rem);
+  overflow: auto;
+  background: #fff;
+  border: 1px solid #e4e4e4;
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  width: 100%;
+}
+
+.modal-header h2 {
+  margin: 0;
+}
+
+form.manual-entry {
+  width: 100%;
+  max-width: none;
+  padding: 1rem;
+}
+
+.manual-entry-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  width: 100%;
+}
+
+.manual-entry-fields label:first-child {
+  grid-column: 1 / -1;
+}
+
 label {
   display: flex;
   flex-direction: column;
@@ -64,11 +121,17 @@ label {
   font-size: 0.9rem;
 }
 
-input {
+input,
+select {
   font: inherit;
   padding: 0.5rem 0.6rem;
   border: 1px solid #ccc;
   border-radius: 6px;
+}
+
+form.manual-entry select {
+  width: 100%;
+  background: #fff;
 }
 
 input[type="checkbox"] {
@@ -183,6 +246,27 @@ select.category-input {
 .category-input:disabled {
   opacity: 0.6;
   cursor: default;
+}
+
+.row-actions {
+  display: flex;
+  gap: 0.65rem;
+  margin-top: 0.4rem;
+}
+
+button.text {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #555;
+  font-size: 0.8rem;
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+
+button.text:disabled {
+  opacity: 0.5;
 }
 
 .feed li:last-child {
@@ -339,4 +423,14 @@ td.check {
 
 .amount.in {
   color: #166534;
+}
+
+@media (max-width: 30rem) {
+  .manual-entry-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .manual-entry-fields label:first-child {
+    grid-column: auto;
+  }
 }

@@ -12,7 +12,7 @@ Link a bank account, and new transactions land in an inbox. Give each one a cate
 
 **Categories.** When a row is first inserted, a database trigger assigns a default category from `plaid_category_map`. Later syncs upsert on Plaid's transaction id and leave `category_id` and `approved` alone, so your choices survive bank updates. Transactions the bank removes are soft-deleted.
 
-**Reviewing.** New Transactions lists everything not yet approved. Home shows one month at a time: total spending, total income, spending by category, and separate lists for income, expenses, and transfers.
+**Reviewing.** You can use the tracker before linking a bank. Add a transaction by hand from Home or New Transactions; it stays unapproved until you check it off, same as a bank row. New Transactions lists everything not yet approved. Home shows one month at a time: total spending, total income, spending by category, and separate lists for income, expenses, and transfers. Connect a bank when you want synced rows; Refresh syncs only when a bank is linked.
 
 ## Stack
 
@@ -71,5 +71,7 @@ Routes other than login and signup require a signed-in Flask session cookie.
 | `POST` | `/api/bank/link-token` | Create a Plaid Link token |
 | `POST` | `/api/bank/connect` | Exchange the Link `public_token` (form field) and save the bank |
 | `GET` | `/api/categories` | List categories in display order |
-| `GET` | `/api/transactions` | Sync from Plaid, then list stored transactions |
-| `PATCH` | `/api/transactions/<plaid_transaction_id>` | Update `approved` and/or `category_id` |
+| `GET` | `/api/transactions` | List the user's transactions; sync from Plaid first when a bank is linked |
+| `POST` | `/api/transactions` | Create a manual transaction (`name`, `amount`, `date`, `entry_type`, optional `category_id`) |
+| `PATCH` | `/api/transactions/<plaid_transaction_id>` | Update `approved`, `category_id`, `name`, `date`, `entry_type`, and/or `amount` |
+| `DELETE` | `/api/transactions/<plaid_transaction_id>` | Soft-delete a transaction |

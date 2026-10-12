@@ -3,8 +3,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import json
+import math
 import os
 import uuid
+from datetime import datetime
 
 from flask import Flask, request, jsonify, session
 import plaid
@@ -15,12 +17,17 @@ from plaid.model.link_token_create_request import LinkTokenCreateRequest
 from plaid.model.link_token_create_request_user import LinkTokenCreateRequestUser
 
 from services.db import (
+    ENTRY_TYPES,
     supabase_client,
+    create_manual_transaction,
     create_user_by_email,
+    fetch_transaction,
     find_user_by_email,
     get_category,
     list_categories,
     list_transactions,
+    soft_delete_transaction,
+    stored_amount,
     update_transaction,
 )
 from services.plaid_client import plaid_client
@@ -31,7 +38,14 @@ app.secret_key = os.environ['SUPABASE_SERVICE_ROLE_KEY']
 
 PLAID_PRODUCTS = os.getenv('PLAID_PRODUCTS', 'transactions').split(',')
 PLAID_COUNTRY_CODES = os.getenv('PLAID_COUNTRY_CODES', 'US').split(',')
-ALLOWED_FIELDS_UPDATE = {'approved', 'category_id'}
+ALLOWED_FIELDS_UPDATE = {
+    'approved',
+    'category_id',
+    'name',
+    'date',
+    'entry_type',
+    'amount',
+}
 
 def empty_to_none(field):
     value = os.getenv(field)
@@ -57,18 +71,14 @@ def require_user_id():
     return user_id, None
 
 
-def require_plaid_item():
-    user_id, error = require_user_id()
-    if error:
-        return None, None, error
+def get_linked_access_token(user_id):
     rows = supabase_client.table('plaid_items').select(
-        'id, access_token'
+        'access_token'
     ).eq('user_id', user_id).execute().data
 
     if not rows or not rows[0].get('access_token'):
-        return None, None, (jsonify({'error': 'No linked bank account. Connect one first.'}), 400)
-
-    return rows[0]['id'], rows[0]['access_token'], None
+        return None
+    return rows[0]['access_token']
 
 
 @app.route('/api/login', methods=['POST'])
@@ -203,12 +213,15 @@ def categories():
 
 @app.route('/api/transactions', methods=['GET'])
 def transactions():
-    plaid_item_id, access_token, error = require_plaid_item()
+    user_id, error = require_user_id()
     if error:
         return error
 
-    get_transactions(access_token)
-    return jsonify(list_transactions(plaid_item_id))
+    access_token = get_linked_access_token(user_id)
+    if access_token:
+        get_transactions(access_token)
+    return jsonify(list_transactions(user_id))
+
 
 def parse_category_id(value):
     if value is None:
@@ -217,14 +230,110 @@ def parse_category_id(value):
         raise ValueError
     return str(uuid.UUID(value))
 
+
+def parse_manual_category_id(data):
+    if 'category_id' not in data:
+        return None, None
+    try:
+        category_id = parse_category_id(data['category_id'])
+    except (ValueError, TypeError):
+        return None, (jsonify({'error': 'category_id must be a category id'}), 400)
+    if category_id is not None and not get_category(category_id):
+        return None, (jsonify({'error': 'Unknown category'}), 400)
+    return category_id, None
+
+
+def parse_positive_amount(value):
+    try:
+        amount = float(value)
+    except (TypeError, ValueError):
+        return None, (jsonify({'error': 'amount must be a positive number'}), 400)
+    if not math.isfinite(amount) or amount <= 0:
+        return None, (jsonify({'error': 'amount must be a positive number'}), 400)
+    return amount, None
+
+
+def parse_date_value(value):
+    if not isinstance(value, str):
+        return None, (jsonify({'error': 'date must be YYYY-MM-DD'}), 400)
+    try:
+        return datetime.strptime(value, '%Y-%m-%d').date().isoformat(), None
+    except ValueError:
+        return None, (jsonify({'error': 'date must be YYYY-MM-DD'}), 400)
+
+
+@app.route('/api/transactions', methods=['POST'])
+def create_transaction():
+    user_id, error = require_user_id()
+    if error:
+        return error
+
+    data = request.get_json(silent=True) or {}
+    name = (data.get('name') or '').strip()
+    if not name:
+        return jsonify({'error': 'name is required'}), 400
+
+    amount, amount_error = parse_positive_amount(data.get('amount'))
+    if amount_error:
+        return amount_error
+
+    date, date_error = parse_date_value(data.get('date'))
+    if date_error:
+        return date_error
+
+    entry_type = data.get('entry_type')
+    if entry_type not in ENTRY_TYPES:
+        return jsonify({'error': 'entry_type must be expense, income, or transfer'}), 400
+
+    category_id, category_error = parse_manual_category_id(data)
+    if category_error:
+        return category_error
+
+    created = create_manual_transaction(
+        user_id,
+        name=name,
+        amount=amount,
+        date=date,
+        entry_type=entry_type,
+        category_id=category_id,
+    )
+    if not created:
+        return jsonify({'error': 'Could not create transaction'}), 500
+    return jsonify(created), 201
+
+
 @app.route('/api/transactions/<plaid_transaction_id>', methods=['PATCH'])
 def patch_transaction(plaid_transaction_id):
-    plaid_item_id, _, error = require_plaid_item()
+    user_id, error = require_user_id()
     if error:
         return error
 
     data = request.get_json(silent=True) or {}
     fields = {key: data[key] for key in ALLOWED_FIELDS_UPDATE if key in data}
+    if not fields:
+        return jsonify({'error': 'No fields to update'}), 400
+
+    if 'name' in fields:
+        name = (fields['name'] or '').strip() if isinstance(fields['name'], str) else ''
+        if not name:
+            return jsonify({'error': 'name is required'}), 400
+        fields['name'] = name
+
+    if 'date' in fields:
+        date, date_error = parse_date_value(fields['date'])
+        if date_error:
+            return date_error
+        fields['date'] = date
+
+    if 'entry_type' in fields and fields['entry_type'] not in ENTRY_TYPES:
+        return jsonify({'error': 'entry_type must be expense, income, or transfer'}), 400
+
+    if 'amount' in fields:
+        amount, amount_error = parse_positive_amount(fields['amount'])
+        if amount_error:
+            return amount_error
+        fields['amount'] = amount
+
     if 'category_id' in fields:
         try:
             category_id = parse_category_id(fields['category_id'])
@@ -233,13 +342,36 @@ def patch_transaction(plaid_transaction_id):
         if category_id is not None and not get_category(category_id):
             return jsonify({'error': 'Unknown category'}), 400
         fields['category_id'] = category_id
-    if not fields:
-        return jsonify({'error': 'No fields to update'}), 400
 
-    result = update_transaction(plaid_item_id, plaid_transaction_id, fields)
+    if 'amount' in fields or 'entry_type' in fields:
+        current = fetch_transaction(user_id, plaid_transaction_id)
+        if not current:
+            return jsonify({'error': 'Transaction not found'}), 404
+        entry_type = fields.get('entry_type', current.get('entry_type'))
+        if entry_type not in ENTRY_TYPES:
+            return jsonify({'error': 'entry_type must be expense, income, or transfer'}), 400
+        if 'amount' in fields:
+            magnitude = fields['amount']
+        else:
+            magnitude = abs(float(current['amount']))
+        fields['amount'] = stored_amount(magnitude, entry_type)
+        fields['entry_type'] = entry_type
+
+    result = update_transaction(user_id, plaid_transaction_id, fields)
     if not result:
         return jsonify({'error': 'Transaction not found'}), 404
     return jsonify(result)
+
+
+@app.route('/api/transactions/<plaid_transaction_id>', methods=['DELETE'])
+def delete_transaction(plaid_transaction_id):
+    user_id, error = require_user_id()
+    if error:
+        return error
+
+    if not soft_delete_transaction(user_id, plaid_transaction_id):
+        return jsonify({'error': 'Transaction not found'}), 404
+    return jsonify({'ok': True})
 
 def format_error(e):
     response = json.loads(e.body)

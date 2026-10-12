@@ -1,5 +1,6 @@
 import os
 import re
+import uuid
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 from supabase import create_client
@@ -15,6 +16,10 @@ TRANSFER_PRIMARIES = {'TRANSFER_IN', 'TRANSFER_OUT', 'EQUITY_AND_INVESTMENTS'}
 EXPENSE_DETAILED = {'TRANSFER_OUT_TRANSFER_OUT_FROM_APPS'}   # Zelle etc. sent out
 INCOME_DETAILED = {'TRANSFER_IN_TRANSFER_IN_FROM_APPS'}      # Zelle etc. received
 CARD_PAYMENT_NAME = re.compile(r'payment\s*-?\s*thank', re.IGNORECASE)
+TRANSACTION_LIST_SELECT = (
+    'plaid_transaction_id, name, merchant_name, amount, date, approved, entry_type, category_id'
+)
+ENTRY_TYPES = {'expense', 'income', 'transfer'}
 
 def find_user_by_email(email):
     target = email.strip().lower()
@@ -58,7 +63,7 @@ def classify_transaction_type(transaction):
         return 'income'
     return 'expense'     # positive = purchase, negative = refund
 
-def to_transaction_row(transaction, plaid_item_id):
+def to_transaction_row(transaction, item_id, user_id):
     date = transaction['date']
     if hasattr(date, 'isoformat'):
         date = date.isoformat()
@@ -67,7 +72,8 @@ def to_transaction_row(transaction, plaid_item_id):
     amount = float(transaction['amount'])
 
     return {
-        'plaid_item_id': plaid_item_id,
+        'item_id': item_id,
+        'user_id': user_id,
         'plaid_transaction_id': transaction['transaction_id'],
         'plaid_account_id': transaction.get('account_id'),
         'name': transaction.get('name') or 'Unknown transaction',
@@ -94,30 +100,58 @@ def get_latest_cursor_or_none(access_token):
         return None
     return cursor.data['transactions_cursor']
 
+USER_EDITABLE_SYNC_FIELDS = ('name', 'amount', 'date', 'entry_type')
+
 def add_transactions(access_token, added, modified, removed, cursor):
     item = (
         supabase_client.from_('plaid_items')
-        .select('id')
+        .select('id, user_id')
         .eq('access_token', access_token)
         .single()
         .execute()
     )
 
-    plaid_item_id = item.data['id']
+    item_id = item.data['id']
+    user_id = item.data['user_id']
     posted = [transaction for transaction in added + modified if not transaction.get('pending')]
-    posted_transaction_rows = [to_transaction_row(transaction, plaid_item_id) for transaction in posted]
+    posted_transaction_rows = [
+        to_transaction_row(transaction, item_id, user_id) for transaction in posted
+    ]
 
     if posted_transaction_rows:
         # Leave category_id off the payload. Inserts get it from the
         # set_default_category trigger; updates must keep a user's choice.
+        # Existing rows also keep name/amount/date/entry_type so edits survive sync.
+        plaid_ids = [row['plaid_transaction_id'] for row in posted_transaction_rows]
+        existing = set()
+        for i in range(0, len(plaid_ids), 100):
+            chunk = plaid_ids[i:i + 100]
+            found = (
+                supabase_client.from_('transactions')
+                .select('plaid_transaction_id')
+                .in_('plaid_transaction_id', chunk)
+                .execute()
+            )
+            for row in found.data or []:
+                existing.add(row['plaid_transaction_id'])
+
+        for row in posted_transaction_rows:
+            if row['plaid_transaction_id'] in existing:
+                for field in USER_EDITABLE_SYNC_FIELDS:
+                    row.pop(field, None)
+
         supabase_client.from_('transactions').upsert(
             posted_transaction_rows,
             on_conflict='plaid_transaction_id',
         ).execute()
 
     deleted_at = datetime.now(timezone.utc).isoformat()
-    for item in removed:
-        transaction_id = item['transaction_id'] if isinstance(item, dict) else item
+    for removed_item in removed:
+        transaction_id = (
+            removed_item['transaction_id']
+            if isinstance(removed_item, dict)
+            else removed_item
+        )
         supabase_client.from_('transactions').update({
             'deleted_at': deleted_at,
         }).eq('plaid_transaction_id', transaction_id).execute()
@@ -147,30 +181,83 @@ def get_category(category_id):
     rows = result.data or []
     return rows[0] if rows else None
 
-def list_transactions(plaid_item_id):
-    result = (
-        supabase_client.from_('transactions')
-        .select(
-            'plaid_transaction_id, name, merchant_name, amount, date, approved, entry_type, category_id'
-        )
-        .eq('plaid_item_id', plaid_item_id)
-        .is_('deleted_at', 'null')
-        .order('date', desc=True)
-        .execute()
-    )
+def with_category_names(rows):
     names = {row['id']: row['name'] for row in list_categories()}
-    rows = result.data or []
     for row in rows:
         row['category_name'] = names.get(row.get('category_id'))
     return rows
 
-def update_transaction(plaid_item_id, plaid_transaction_id, fields):
+def list_transactions(user_id):
+    result = (
+        supabase_client.from_('transactions')
+        .select(TRANSACTION_LIST_SELECT)
+        .eq('user_id', user_id)
+        .is_('deleted_at', 'null')
+        .order('date', desc=True)
+        .execute()
+    )
+    return with_category_names(result.data or [])
+
+def stored_amount(amount, entry_type):
+    return -abs(amount) if entry_type == 'income' else abs(amount)
+
+def fetch_transaction(user_id, plaid_transaction_id):
+    result = (
+        supabase_client.from_('transactions')
+        .select(TRANSACTION_LIST_SELECT)
+        .eq('user_id', user_id)
+        .eq('plaid_transaction_id', plaid_transaction_id)
+        .is_('deleted_at', 'null')
+        .limit(1)
+        .execute()
+    )
+    rows = with_category_names(result.data or [])
+    return rows[0] if rows else None
+
+def create_manual_transaction(user_id, name, amount, date, entry_type, category_id=None):
+    row = {
+        'user_id': user_id,
+        'item_id': None,
+        'plaid_transaction_id': f'manual-{uuid.uuid4()}',
+        'name': name,
+        'amount': stored_amount(amount, entry_type),
+        'date': date,
+        'iso_currency_code': 'USD',
+        'entry_type': entry_type,
+        'approved': True,
+        'category_id': category_id,
+    }
+    result = (
+        supabase_client.from_('transactions')
+        .insert(row)
+        .execute()
+    )
+    created = result.data or []
+    if not created:
+        return None
+    return fetch_transaction(user_id, created[0]['plaid_transaction_id'])
+
+def update_transaction(user_id, plaid_transaction_id, fields):
     result = (
         supabase_client.from_('transactions')
         .update(fields)
-        .eq('plaid_item_id', plaid_item_id)
+        .eq('user_id', user_id)
         .eq('plaid_transaction_id', plaid_transaction_id)
         .is_('deleted_at', 'null')
         .execute()
     )
-    return result.data or []
+    if not result.data:
+        return None
+    return fetch_transaction(user_id, plaid_transaction_id)
+
+def soft_delete_transaction(user_id, plaid_transaction_id):
+    deleted_at = datetime.now(timezone.utc).isoformat()
+    result = (
+        supabase_client.from_('transactions')
+        .update({'deleted_at': deleted_at})
+        .eq('user_id', user_id)
+        .eq('plaid_transaction_id', plaid_transaction_id)
+        .is_('deleted_at', 'null')
+        .execute()
+    )
+    return bool(result.data)

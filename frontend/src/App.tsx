@@ -44,21 +44,36 @@ function parseCategories(data: unknown): Category[] {
   });
 }
 
+function parseTransaction(data: unknown): Transaction | null {
+  if (!data || typeof data !== "object") return null;
+  const row = data as Record<string, unknown>;
+  const id = String(row.plaid_transaction_id ?? "");
+  if (!id) return null;
+  return {
+    id,
+    name: String(row.name || row.merchant_name || "Unknown"),
+    amount: Number(row.amount),
+    date: String(row.date ?? "").slice(0, 10),
+    approved: row.approved === true,
+    entryType: parseKind(row.entry_type),
+    categoryId: typeof row.category_id === "string" ? row.category_id : null,
+    categoryName: typeof row.category_name === "string" ? row.category_name : null,
+  };
+}
+
 function parseTransactions(data: unknown): Transaction[] {
   if (!Array.isArray(data)) return [];
-  return data.map((tx) => {
-    const row = tx as Record<string, unknown>;
-    return {
-      id: String(row.plaid_transaction_id ?? ""),
-      name: String(row.name || row.merchant_name || "Unknown"),
-      amount: Number(row.amount),
-      date: String(row.date ?? "").slice(0, 10),
-      approved: row.approved === true,
-      entryType: parseKind(row.entry_type),
-      categoryId: typeof row.category_id === "string" ? row.category_id : null,
-      categoryName: typeof row.category_name === "string" ? row.category_name : null,
-    };
+  return data.flatMap((item) => {
+    const tx = parseTransaction(item);
+    return tx ? [tx] : [];
   });
+}
+
+function todayKey() {
+  const now = new Date();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${now.getFullYear()}-${month}-${day}`;
 }
 
 function formatMoney(amount: number) {
@@ -259,18 +274,388 @@ function CategoryEditor({
   );
 }
 
+function ManualEntryForm({
+  categories,
+  onCreated,
+  onError,
+}: {
+  categories: Category[];
+  onCreated: (transaction: Transaction) => void;
+  onError: (message: string | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [amount, setAmount] = useState("");
+  const [date, setDate] = useState(todayKey);
+  const [entryType, setEntryType] = useState<Kind>("expense");
+  const [categoryId, setCategoryId] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  function resetForm() {
+    setName("");
+    setAmount("");
+    setDate(todayKey());
+    setEntryType("expense");
+    setCategoryId("");
+  }
+
+  function close() {
+    if (submitting) return;
+    setOpen(false);
+    resetForm();
+  }
+
+  useEffect(() => {
+    if (!open) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape" || submitting) return;
+      setOpen(false);
+      setName("");
+      setAmount("");
+      setDate(todayKey());
+      setEntryType("expense");
+      setCategoryId("");
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [open, submitting]);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const trimmed = name.trim();
+    const value = Number(amount);
+    if (!trimmed || !Number.isFinite(value) || value <= 0) {
+      onError("Enter a name and a positive amount");
+      return;
+    }
+    setSubmitting(true);
+    onError(null);
+    try {
+      const body: Record<string, unknown> = {
+        name: trimmed,
+        amount: value,
+        date,
+        entry_type: entryType,
+      };
+      if (categoryId) body.category_id = categoryId;
+      const response = await fetch("/api/transactions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        onError(errorText(data, "Could not add transaction"));
+        return;
+      }
+      const created = parseTransaction(data);
+      if (!created) {
+        onError("Could not add transaction");
+        return;
+      }
+      onCreated(created);
+      resetForm();
+      setOpen(false);
+    } catch {
+      onError("Backend not reachable");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <>
+      <button type="button" onClick={() => setOpen(true)}>
+        Add transaction
+      </button>
+      {open && (
+        <div
+          className="modal-backdrop"
+          onClick={close}
+          role="presentation"
+        >
+          <div
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="manual-entry-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <form className="manual-entry" onSubmit={submit}>
+              <div className="modal-header">
+                <h2 id="manual-entry-title">Add transaction</h2>
+                <button
+                  type="button"
+                  className="secondary"
+                  aria-label="Close"
+                  onClick={close}
+                  disabled={submitting}
+                >
+                  Close
+                </button>
+              </div>
+              <div className="manual-entry-fields">
+                <label>
+                  Name
+                  <input
+                    type="text"
+                    name="name"
+                    value={name}
+                    onChange={(event) => setName(event.target.value)}
+                    required
+                    autoFocus
+                  />
+                </label>
+                <label>
+                  Amount
+                  <input
+                    type="number"
+                    name="amount"
+                    min="0.01"
+                    step="0.01"
+                    value={amount}
+                    onChange={(event) => setAmount(event.target.value)}
+                    required
+                  />
+                </label>
+                <label>
+                  Date
+                  <input
+                    type="date"
+                    name="date"
+                    value={date}
+                    onChange={(event) => setDate(event.target.value)}
+                    required
+                  />
+                </label>
+                <label>
+                  Type
+                  <select
+                    name="entry_type"
+                    value={entryType}
+                    onChange={(event) => setEntryType(parseKind(event.target.value))}
+                  >
+                    <option value="expense">Expense</option>
+                    <option value="income">Income</option>
+                    <option value="transfer">Transfer</option>
+                  </select>
+                </label>
+                <label>
+                  Category
+                  <select
+                    name="category_id"
+                    value={categoryId}
+                    onChange={(event) => setCategoryId(event.target.value)}
+                  >
+                    <option value="">Uncategorized</option>
+                    {categories.map((category) => (
+                      <option key={category.id} value={category.id}>
+                        {category.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <div className="actions">
+                <button type="submit" disabled={submitting}>
+                  {submitting ? "Adding…" : "Add"}
+                </button>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={close}
+                  disabled={submitting}
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+function EditTransactionForm({
+  transaction,
+  onSaved,
+  onClose,
+  onError,
+}: {
+  transaction: Transaction;
+  onSaved: (transaction: Transaction) => void;
+  onClose: () => void;
+  onError: (message: string | null) => void;
+}) {
+  const [name, setName] = useState(transaction.name);
+  const [amount, setAmount] = useState(String(Math.abs(transaction.amount)));
+  const [date, setDate] = useState(transaction.date);
+  const [entryType, setEntryType] = useState<Kind>(transaction.entryType);
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape" || submitting) return;
+      onClose();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose, submitting]);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const trimmed = name.trim();
+    const value = Number(amount);
+    if (!trimmed || !Number.isFinite(value) || value <= 0) {
+      onError("Enter a name and a positive amount");
+      return;
+    }
+    setSubmitting(true);
+    onError(null);
+    try {
+      const response = await fetch(
+        `/api/transactions/${encodeURIComponent(transaction.id)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: trimmed,
+            amount: value,
+            date,
+            entry_type: entryType,
+          }),
+        },
+      );
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        onError(errorText(data, "Could not update transaction"));
+        return;
+      }
+      const updated = parseTransaction(data);
+      if (!updated) {
+        onError("Could not update transaction");
+        return;
+      }
+      onSaved(updated);
+      onClose();
+    } catch {
+      onError("Backend not reachable");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div
+      className="modal-backdrop"
+      onClick={() => {
+        if (!submitting) onClose();
+      }}
+      role="presentation"
+    >
+      <div
+        className="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="edit-entry-title"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <form className="manual-entry" onSubmit={submit}>
+          <div className="modal-header">
+            <h2 id="edit-entry-title">Edit transaction</h2>
+            <button
+              type="button"
+              className="secondary"
+              aria-label="Close"
+              onClick={onClose}
+              disabled={submitting}
+            >
+              Close
+            </button>
+          </div>
+          <div className="manual-entry-fields">
+            <label>
+              Name
+              <input
+                type="text"
+                name="name"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                required
+                autoFocus
+              />
+            </label>
+            <label>
+              Amount
+              <input
+                type="number"
+                name="amount"
+                min="0.01"
+                step="0.01"
+                value={amount}
+                onChange={(event) => setAmount(event.target.value)}
+                required
+              />
+            </label>
+            <label>
+              Date
+              <input
+                type="date"
+                name="date"
+                value={date}
+                onChange={(event) => setDate(event.target.value)}
+                required
+              />
+            </label>
+            <label>
+              Type
+              <select
+                name="entry_type"
+                value={entryType}
+                onChange={(event) => setEntryType(parseKind(event.target.value))}
+              >
+                <option value="expense">Expense</option>
+                <option value="income">Income</option>
+                <option value="transfer">Transfer</option>
+              </select>
+            </label>
+          </div>
+          <div className="actions">
+            <button type="submit" disabled={submitting}>
+              {submitting ? "Saving…" : "Save"}
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              onClick={onClose}
+              disabled={submitting}
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 function UpdatesFeed({
   rows,
   categories,
   savingIds,
   onToggle,
   onCategory,
+  onEdit,
+  onDelete,
 }: {
   rows: Transaction[];
   categories: Category[];
   savingIds: ReadonlySet<string>;
   onToggle: (transaction: Transaction) => void;
   onCategory: (transaction: Transaction, categoryId: string | null) => void;
+  onEdit: (transaction: Transaction) => void;
+  onDelete: (transaction: Transaction) => void;
 }) {
   return (
     <section>
@@ -290,6 +675,24 @@ function UpdatesFeed({
                   categories={categories}
                   onSave={onCategory}
                 />
+                <div className="row-actions">
+                  <button
+                    type="button"
+                    className="text"
+                    disabled={!tx.id || savingIds.has(tx.id)}
+                    onClick={() => onEdit(tx)}
+                  >
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    className="text"
+                    disabled={!tx.id || savingIds.has(tx.id)}
+                    onClick={() => onDelete(tx)}
+                  >
+                    Delete
+                  </button>
+                </div>
               </div>
               <span className={tx.amount > 0 ? "amount out" : "amount in"}>
                 {formatAmount(tx.amount)}
@@ -317,6 +720,8 @@ function TransactionTable({
   savingIds,
   onToggle,
   onCategory,
+  onEdit,
+  onDelete,
 }: {
   title: string;
   rows: Transaction[];
@@ -325,6 +730,8 @@ function TransactionTable({
   savingIds: ReadonlySet<string>;
   onToggle: (transaction: Transaction) => void;
   onCategory: (transaction: Transaction, categoryId: string | null) => void;
+  onEdit: (transaction: Transaction) => void;
+  onDelete: (transaction: Transaction) => void;
 }) {
   return (
     <section>
@@ -348,6 +755,24 @@ function TransactionTable({
                     categories={categories}
                     onSave={onCategory}
                   />
+                  <div className="row-actions">
+                    <button
+                      type="button"
+                      className="text"
+                      disabled={!tx.id || savingIds.has(tx.id)}
+                      onClick={() => onEdit(tx)}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      className="text"
+                      disabled={!tx.id || savingIds.has(tx.id)}
+                      onClick={() => onDelete(tx)}
+                    >
+                      Delete
+                    </button>
+                  </div>
                 </td>
                 <td className={tx.amount > 0 ? "amount out" : "amount in"}>
                   {formatAmount(tx.amount)}
@@ -489,6 +914,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState<"home" | "updates">("home");
   const [month, setMonth] = useState(currentMonthKey);
+  const [editing, setEditing] = useState<Transaction | null>(null);
   const waiting = transactions.filter((tx) => !tx.approved);
   const approved = transactions.filter((tx) => tx.approved && tx.date.slice(0, 7) === month);
   const income = approved.filter((tx) => kindOf(tx) === "income");
@@ -585,6 +1011,7 @@ export default function App() {
     setTransactions([]);
     setCategories([]);
     setSavingIds(new Set());
+    setEditing(null);
     setPage("home");
     setMonth(currentMonthKey());
     setError(null);
@@ -628,6 +1055,38 @@ export default function App() {
             : row,
         ),
       );
+      setError("Backend not reachable");
+    } finally {
+      setSavingIds((current) => {
+        const next = new Set(current);
+        next.delete(transaction.id);
+        return next;
+      });
+    }
+  }
+
+  async function deleteTransaction(transaction: Transaction) {
+    if (!transaction.id || savingIds.has(transaction.id)) return;
+    if (!window.confirm(`Delete “${transaction.name}”?`)) return;
+    setSavingIds((current) => new Set(current).add(transaction.id));
+    setError(null);
+    try {
+      const response = await fetch(
+        `/api/transactions/${encodeURIComponent(transaction.id)}`,
+        { method: "DELETE" },
+      );
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        setError(errorText(data, "Could not delete transaction"));
+        return;
+      }
+      setTransactions((current) =>
+        current.filter((row) => row.id !== transaction.id),
+      );
+      setEditing((current) =>
+        current?.id === transaction.id ? null : current,
+      );
+    } catch {
       setError("Backend not reachable");
     } finally {
       setSavingIds((current) => {
@@ -709,7 +1168,7 @@ export default function App() {
   }, [email]);
 
   useEffect(() => {
-    if (!linked) return;
+    if (linked === null) return;
     const controller = new AbortController();
     loadTransactions(controller.signal);
     return () => controller.abort();
@@ -744,15 +1203,15 @@ export default function App() {
       </header>
       {error && <p className="error">{error}</p>}
       {linked === null && <p>Loading…</p>}
-      {linked === false && linkToken && (
-        <Connect
-          token={linkToken}
-          onLinked={() => setLinked(true)}
-          onError={setError}
-        />
-      )}
-      {linked && (
+      {linked !== null && (
         <>
+          {linked === false && linkToken && (
+            <Connect
+              token={linkToken}
+              onLinked={() => setLinked(true)}
+              onError={setError}
+            />
+          )}
           <nav className="pages" aria-label="Sections">
             <button
               type="button"
@@ -772,14 +1231,38 @@ export default function App() {
               {waiting.length > 0 && <span className="badge">{waiting.length}</span>}
             </button>
           </nav>
-          <button
-            type="button"
-            className="secondary"
-            onClick={() => loadTransactions()}
-            disabled={loading}
-          >
-            {loading ? "Loading…" : "Refresh"}
-          </button>
+          <div className="toolbar">
+            <ManualEntryForm
+              categories={categories}
+              onCreated={(transaction) =>
+                setTransactions((current) => [transaction, ...current])
+              }
+              onError={setError}
+            />
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => loadTransactions()}
+              disabled={loading}
+            >
+              {loading ? "Loading…" : "Refresh"}
+            </button>
+          </div>
+          {editing && (
+            <EditTransactionForm
+              key={editing.id}
+              transaction={editing}
+              onSaved={(updated) =>
+                setTransactions((current) =>
+                  current.map((row) =>
+                    row.id === updated.id ? updated : row,
+                  ),
+                )
+              }
+              onClose={() => setEditing(null)}
+              onError={setError}
+            />
+          )}
           {page === "home" && !loading && transactions.length === 0 && !error && (
             <p>No transactions.</p>
           )}
@@ -798,6 +1281,8 @@ export default function App() {
                 savingIds={savingIds}
                 onToggle={toggleApproved}
                 onCategory={saveCategory}
+                onEdit={setEditing}
+                onDelete={deleteTransaction}
               />
               <TransactionTable
                 title="Expenses"
@@ -807,6 +1292,8 @@ export default function App() {
                 savingIds={savingIds}
                 onToggle={toggleApproved}
                 onCategory={saveCategory}
+                onEdit={setEditing}
+                onDelete={deleteTransaction}
               />
               <TransactionTable
                 title="Transfers"
@@ -816,6 +1303,8 @@ export default function App() {
                 savingIds={savingIds}
                 onToggle={toggleApproved}
                 onCategory={saveCategory}
+                onEdit={setEditing}
+                onDelete={deleteTransaction}
               />
             </>
           )}
@@ -826,6 +1315,8 @@ export default function App() {
               savingIds={savingIds}
               onToggle={toggleApproved}
               onCategory={saveCategory}
+              onEdit={setEditing}
+              onDelete={deleteTransaction}
             />
           )}
         </>
