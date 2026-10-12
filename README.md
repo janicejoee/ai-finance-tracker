@@ -1,66 +1,75 @@
 # Expenses Tracker
 
-**Nothing counts until you've looked at it.**
+Expenses Tracker turns your bank feed into a month you've actually reviewed.
 
-Most budgeting apps take your bank feed on faith. This one treats every transaction as a suspect. It waits in an inbox until you give it a category and check the box. Only then does it count toward the month.
+Link a bank account, and new transactions land in an inbox. Give each one a category and check it off. Only approved transactions count toward the month, so the totals reflect what you've looked at, not whatever the bank sent.
 
-Changed your mind? Uncheck it, and it walks back to the inbox.
+## How it works
 
-## The two screens
+**Syncing.** Plaid Link connects the bank in the browser. The API exchanges the public token for an access token and stores it with your account. Opening the app or pressing Refresh calls Plaid's `/transactions/sync` with a saved cursor, so each sync brings only what was added, changed, or removed since the last one.
 
-**New Transactions** is the inbox. It shows everything you haven't approved yet, with a badge counting what's left. Clear it and you get: *You're all caught up.*
+**Sorting.** Pending charges are skipped until they post. Each posted transaction is labeled an expense, income, or transfer based on Plaid's personal-finance category. Card payments and moves between accounts count as transfers, so paying a card isn't counted as spending twice. Money sent or received through apps like Zelle counts as an expense or income.
 
-**Home** is one month at a time. At the top: what you spent, what came in, and which categories took the money, biggest first. Below that, income, expenses, and transfers each get their own list. Step back through earlier months with Prev and Next.
+**Categories.** When a row is first inserted, a database trigger assigns a default category from `plaid_category_map`. Later syncs upsert on Plaid's transaction id and leave `category_id` and `approved` alone, so your choices survive bank updates. Transactions the bank removes are soft-deleted.
 
-## The journey of a coffee
+**Reviewing.** New Transactions lists everything not yet approved. Home shows one month at a time: total spending, total income, spending by category, and separate lists for income, expenses, and transfers.
 
-```mermaid
-flowchart LR
-    Bank -->|Plaid sync| API[Flask API]
-    API -->|sort + upsert| DB[(Supabase)]
-    DB --> Inbox[New Transactions]
-    Inbox -->|you approve| Month[Home]
+## Stack
+
+| Layer | Tools |
+|---|---|
+| Frontend | React, Vite, TypeScript, react-plaid-link |
+| Backend | Flask |
+| Auth & data | Supabase Auth, Postgres |
+| Banking | Plaid (Link, Transactions Sync) |
+
+## Project layout
+
+```
+backend/                Flask API (port 8000)
+  server.py             Routes for auth, bank linking, categories, and transactions
+  services/
+    plaid_client.py     Plaid client configuration
+    transactions.py     Cursor-based transaction sync
+    db.py               Supabase persistence and transaction classification
+frontend/               React app (port 3000)
+  src/App.tsx           Sign-in, bank link, inbox, and monthly view
 ```
 
-You buy a $5 latte. Here's what happens to it.
+In development, Vite proxies `/api` to the Flask server.
 
-1. **It stays pending.** The bank shows the charge as pending, and the app pretends it doesn't exist. Pending amounts can still change, and nobody wants to file a charge twice.
-2. **It posts.** When you open the app or hit Refresh, the Flask API asks Plaid what has changed since last time. Plaid answers from a saved *cursor* on your bank link, so a sync only brings what was added, changed, or removed, never the whole history again.
-3. **It gets sorted.** Before the API saves it, it reads Plaid's category and labels the latte an expense, income, or transfer (rules below). The row is upserted on Plaid's transaction id, so syncing twice never creates a duplicate.
-4. **It gets a category.** On insert, a database trigger gives it a default category, which you can change from a dropdown.
-5. **You approve it.** Check the box, and it lands in the month.
+## Run locally
 
-If the bank cancels the charge, Plaid reports a removal. The row is soft-deleted and vanishes from both screens.
+Start the API:
 
-## The rules of the sort
+```bash
+cd backend
+source .venv/bin/activate
+python3 server.py
+```
 
-Banks are messy, so the classifier runs a short list of rules, in this order:
+In another terminal, start the UI:
 
-| If the transaction is… | It becomes |
-|---|---|
-| Named like a card payment thank-you | **Transfer** |
-| Money sent through an app such as Zelle | **Expense** |
-| Money received through an app | **Income** |
-| An account transfer, card or loan payment, or investment | **Transfer** |
-| Anything else Plaid marks as income | **Income** |
-| Everything else | **Expense** |
+```bash
+cd frontend
+npm start
+```
 
-The first rule exists because some banks file a card payment as a purchase. Left alone, paying off your card would look like spending the same money twice.
+Open [http://localhost:3000](http://localhost:3000). Create an account with your email and connect a bank. In Sandbox, sign in to the bank with `user_good` / `pass_good`. For more realistic data, use `user_transactions_dynamic`.
 
-Transfers get their own list and stay out of both totals. A refund stays an expense; the money simply comes back in.
+## API
 
-## Yours vs. the bank's
+Routes other than login and signup require a signed-in Flask session cookie.
 
-Every row has two kinds of fields.
-
-- **The bank's:** name, amount, date, and Plaid's category labels. Any sync can rewrite these.
-- **Yours:** whether it's approved, and which category it's in. The sync payload leaves both out, so a later update can correct an amount without wiping your decisions.
-
-## Under the hood
-
-- **React + Vite** is the screen you see, and it only talks to the API.
-- **Flask** is the only process that holds Plaid or Supabase credentials. It exchanges Plaid Link's public token for an access token, runs the sync, and stores your session.
-- **Plaid** connects the bank and supplies its transactions through `/transactions/sync`.
-- **Supabase** holds accounts (through Auth), bank links, categories, and transactions. The API uses the service role, so the browser never touches the database.
-
-Sign-in uses just an email. It's a personal tool, not a bank.
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/signup` | Create an account from an email and sign in |
+| `POST` | `/api/login` | Sign in with an existing email |
+| `POST` | `/api/logout` | Clear the session |
+| `GET` | `/api/session` | Current user's email |
+| `GET` | `/api/bank` | Whether a bank is linked |
+| `POST` | `/api/bank/link-token` | Create a Plaid Link token |
+| `POST` | `/api/bank/connect` | Exchange the Link `public_token` (form field) and save the bank |
+| `GET` | `/api/categories` | List categories in display order |
+| `GET` | `/api/transactions` | Sync from Plaid, then list stored transactions |
+| `PATCH` | `/api/transactions/<plaid_transaction_id>` | Update `approved` and/or `category_id` |
