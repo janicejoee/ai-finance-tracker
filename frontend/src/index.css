@@ -155,6 +155,11 @@ input[type="checkbox"] {
   gap: 0.5rem;
 }
 
+.auth-form h2 {
+  margin: 0 0 0.25rem;
+  font-size: 1.15rem;
+}
+
 button.secondary {
   background: #fff;
   color: #111;

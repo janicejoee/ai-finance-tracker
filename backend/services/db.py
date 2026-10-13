@@ -11,6 +11,13 @@ supabase_client = create_client(
     os.environ["SUPABASE_URL"],
     os.environ["SUPABASE_SERVICE_ROLE_KEY"],
 )
+supabase_auth_client = create_client(
+    os.environ["SUPABASE_URL"],
+    os.environ["SUPABASE_ANON_KEY"],
+)
+
+MIN_PASSWORD_LENGTH = 8
+MAX_NAME_LENGTH = 100
 
 TRANSFER_PRIMARIES = {'TRANSFER_IN', 'TRANSFER_OUT', 'EQUITY_AND_INVESTMENTS'}
 EXPENSE_DETAILED = {'TRANSFER_OUT_TRANSFER_OUT_FROM_APPS'}   # Zelle etc. sent out
@@ -38,12 +45,32 @@ def find_user_by_email(email):
             return None
         page += 1
 
-def create_user_by_email(email):
+def user_display_name(user):
+    meta = getattr(user, 'user_metadata', None) or {}
+    if not isinstance(meta, dict):
+        return None
+    name = (meta.get('full_name') or '').strip()
+    return name or None
+
+
+def create_user_by_email(email, password, name):
     created = supabase_client.auth.admin.create_user({
         'email': email.strip().lower(),
+        'password': password,
         'email_confirm': True,
+        'user_metadata': {
+            'full_name': name.strip(),
+        },
     })
     return created.user
+
+
+def sign_in_with_password(email, password):
+    result = supabase_auth_client.auth.sign_in_with_password({
+        'email': email.strip().lower(),
+        'password': password,
+    })
+    return result.user
 
 def classify_transaction_type(transaction):
     category = transaction.get('personal_finance_category') or {}

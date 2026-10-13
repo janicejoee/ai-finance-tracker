@@ -19,6 +19,8 @@ from plaid.model.link_token_create_request_user import LinkTokenCreateRequestUse
 from chat.routes import chat_bp
 from services.db import (
     ENTRY_TYPES,
+    MAX_NAME_LENGTH,
+    MIN_PASSWORD_LENGTH,
     supabase_client,
     create_manual_transaction,
     create_user_by_email,
@@ -27,15 +29,17 @@ from services.db import (
     get_category,
     list_categories,
     list_transactions,
+    sign_in_with_password,
     soft_delete_transaction,
     stored_amount,
     update_transaction,
+    user_display_name,
 )
 from services.plaid_client import plaid_client
 from services.transactions import get_transactions
 
 app = Flask(__name__)
-app.secret_key = os.environ['SUPABASE_SERVICE_ROLE_KEY']
+app.secret_key = os.environ['FLASK_SECRET_KEY']
 app.register_blueprint(chat_bp)
 
 PLAID_PRODUCTS = os.getenv('PLAID_PRODUCTS', 'transactions').split(',')
@@ -61,9 +65,11 @@ products = [Products(product) for product in PLAID_PRODUCTS]
 
 
 def start_session(user):
+    name = user_display_name(user)
     session['user_id'] = str(user.id)
     session['email'] = user.email
-    return jsonify({'email': user.email})
+    session['name'] = name
+    return jsonify({'email': user.email, 'name': name})
 
 
 def require_user_id():
@@ -87,12 +93,18 @@ def get_linked_access_token(user_id):
 def login():
     data = request.get_json(silent=True) or {}
     email = (data.get('email') or '').strip()
-    if not email:
-        return jsonify({'error': 'Email is required'}), 400
+    password = data.get('password') or ''
+    if not email or not password:
+        return jsonify({'error': 'Email and password are required'}), 400
 
-    user = find_user_by_email(email)
-    if not user:
-        return jsonify({'error': 'No account for that email'}), 401
+    try:
+        user = sign_in_with_password(email, password)
+    except Exception as e:
+        print(f'[login] {e}')
+        return jsonify({'error': 'Invalid email or password'}), 401
+
+    if not user or not user.email:
+        return jsonify({'error': 'Invalid email or password'}), 401
 
     return start_session(user)
 
@@ -101,14 +113,22 @@ def login():
 def signup():
     data = request.get_json(silent=True) or {}
     email = (data.get('email') or '').strip()
+    password = data.get('password') or ''
+    name = (data.get('name') or '').strip()
     if not email or '@' not in email:
         return jsonify({'error': 'Email is required'}), 400
+    if not name or len(name) > MAX_NAME_LENGTH:
+        return jsonify({'error': 'Name is required'}), 400
+    if len(password) < MIN_PASSWORD_LENGTH:
+        return jsonify({
+            'error': f'Password must be at least {MIN_PASSWORD_LENGTH} characters',
+        }), 400
 
     if find_user_by_email(email):
         return jsonify({'error': 'An account with that email already exists'}), 409
 
     try:
-        user = create_user_by_email(email)
+        user = create_user_by_email(email, password, name)
     except Exception as e:
         message = str(e).lower()
         if 'already' in message or 'exists' in message or 'registered' in message:
@@ -134,7 +154,7 @@ def current_session():
     email = session.get('email')
     if not session.get('user_id') or not email:
         return jsonify({'error': 'Sign in required'}), 401
-    return jsonify({'email': email})
+    return jsonify({'email': email, 'name': session.get('name')})
 
 
 @app.route('/api/bank', methods=['GET'])

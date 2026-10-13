@@ -59,9 +59,11 @@ cd frontend
 npm start
 ```
 
-Open [http://localhost:3000](http://localhost:3000). Create an account with your email and connect a bank. In Sandbox, sign in to the bank with `user_good` / `pass_good`. For more realistic data, use `user_transactions_dynamic`.
+Open [http://localhost:3000](http://localhost:3000). Create an account with your name, email, and password, then connect a bank. In Sandbox, sign in to the bank with `user_good` / `pass_good`. For more realistic data, use `user_transactions_dynamic`.
 
-For Ask, set `ANTHROPIC_API_KEY` in the backend environment (along with `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`).
+For Ask, set `ANTHROPIC_API_KEY` in the backend environment (along with `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_ANON_KEY`, and `FLASK_SECRET_KEY`).
+
+Accounts created before password auth was added need a password set in the Supabase dashboard (Auth → Users), or create a new account.
 
 ## API
 
@@ -69,10 +71,10 @@ Routes other than login and signup require a signed-in Flask session cookie.
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/api/signup` | Create an account from an email and sign in |
-| `POST` | `/api/login` | Sign in with an existing email |
+| `POST` | `/api/signup` | Create an account (`email`, `password`, `name`) and sign in |
+| `POST` | `/api/login` | Sign in with `email` and `password` |
 | `POST` | `/api/logout` | Clear the session |
-| `GET` | `/api/session` | Current user's email |
+| `GET` | `/api/session` | Current user's email and name |
 | `GET` | `/api/bank` | Whether a bank is linked |
 | `POST` | `/api/bank/link-token` | Create a Plaid Link token |
 | `POST` | `/api/bank/connect` | Exchange the Link `public_token` (form field) and save the bank |

@@ -801,30 +801,44 @@ function TransactionTable({
   );
 }
 
-function Login({ onLoggedIn }: { onLoggedIn: (email: string) => void }) {
+type AuthUser = {
+  email: string;
+  name: string | null;
+};
+
+function parseAuthUser(data: unknown): AuthUser | null {
+  if (!data || typeof data !== "object") return null;
+  const row = data as { email?: unknown; name?: unknown };
+  if (typeof row.email !== "string" || !row.email) return null;
+  return {
+    email: row.email,
+    name: typeof row.name === "string" && row.name.trim() ? row.name.trim() : null,
+  };
+}
+
+function SignIn({ onLoggedIn }: { onLoggedIn: (user: AuthUser) => void }) {
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const submitter = (event.nativeEvent as SubmitEvent).submitter;
-    const creating =
-      submitter instanceof HTMLButtonElement && submitter.value === "signup";
     setSubmitting(true);
     setError(null);
     try {
-      const response = await fetch(creating ? "/api/signup" : "/api/login", {
+      const response = await fetch("/api/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email }),
+        body: JSON.stringify({ email, password }),
       });
       const data = await response.json().catch(() => null);
-      if (!response.ok || !data?.email) {
-        setError(errorText(data, creating ? "Could not create account" : "Could not sign in"));
+      const user = parseAuthUser(data);
+      if (!response.ok || !user) {
+        setError(errorText(data, "Could not sign in"));
         return;
       }
-      onLoggedIn(String(data.email));
+      onLoggedIn(user);
     } catch {
       setError("Backend not reachable");
     } finally {
@@ -833,8 +847,8 @@ function Login({ onLoggedIn }: { onLoggedIn: (email: string) => void }) {
   }
 
   return (
-    <form onSubmit={submit}>
-      <h1>Sign in</h1>
+    <form className="auth-form" onSubmit={submit}>
+      <h2>Sign in</h2>
       <label>
         Email
         <input
@@ -846,21 +860,142 @@ function Login({ onLoggedIn }: { onLoggedIn: (email: string) => void }) {
           required
         />
       </label>
+      <label>
+        Password
+        <input
+          type="password"
+          name="password"
+          autoComplete="current-password"
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+          required
+          minLength={8}
+        />
+      </label>
       {error && <p className="error">{error}</p>}
       <div className="actions">
-        <button type="submit" value="login" disabled={submitting}>
+        <button type="submit" disabled={submitting}>
           {submitting ? "Please wait…" : "Sign in"}
-        </button>
-        <button
-          type="submit"
-          value="signup"
-          className="secondary"
-          disabled={submitting}
-        >
-          Create account
         </button>
       </div>
     </form>
+  );
+}
+
+function SignUp({ onLoggedIn }: { onLoggedIn: (user: AuthUser) => void }) {
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!name.trim()) {
+      setError("Name is required");
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password, name: name.trim() }),
+      });
+      const data = await response.json().catch(() => null);
+      const user = parseAuthUser(data);
+      if (!response.ok || !user) {
+        setError(errorText(data, "Could not create account"));
+        return;
+      }
+      onLoggedIn(user);
+    } catch {
+      setError("Backend not reachable");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <form className="auth-form" onSubmit={submit}>
+      <h2>Create account</h2>
+      <label>
+        Name
+        <input
+          type="text"
+          name="name"
+          autoComplete="name"
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+          required
+        />
+      </label>
+      <label>
+        Email
+        <input
+          type="email"
+          name="email"
+          autoComplete="email"
+          value={email}
+          onChange={(event) => setEmail(event.target.value)}
+          required
+        />
+      </label>
+      <label>
+        Password
+        <input
+          type="password"
+          name="password"
+          autoComplete="new-password"
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+          required
+          minLength={8}
+        />
+      </label>
+      {error && <p className="error">{error}</p>}
+      <div className="actions">
+        <button type="submit" disabled={submitting}>
+          {submitting ? "Please wait…" : "Create account"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function AuthScreens({ onLoggedIn }: { onLoggedIn: (user: AuthUser) => void }) {
+  const [mode, setMode] = useState<"signin" | "signup">("signin");
+
+  return (
+    <>
+      <header className="top">
+        <h1>Personal Copilot Finance Tracker</h1>
+      </header>
+      <nav className="pages" aria-label="Account">
+        <button
+          type="button"
+          className={mode === "signin" ? "active" : undefined}
+          aria-current={mode === "signin" ? "page" : undefined}
+          onClick={() => setMode("signin")}
+        >
+          Sign in
+        </button>
+        <button
+          type="button"
+          className={mode === "signup" ? "active" : undefined}
+          aria-current={mode === "signup" ? "page" : undefined}
+          onClick={() => setMode("signup")}
+        >
+          Create account
+        </button>
+      </nav>
+      {mode === "signup" ? (
+        <SignUp onLoggedIn={onLoggedIn} />
+      ) : (
+        <SignIn onLoggedIn={onLoggedIn} />
+      )}
+    </>
   );
 }
 
@@ -1041,6 +1176,7 @@ function Connect({
 
 export default function App() {
   const [email, setEmail] = useState<string | null>(null);
+  const [displayName, setDisplayName] = useState<string | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
   const [linked, setLinked] = useState<boolean | null>(null);
   const [linkToken, setLinkToken] = useState<string | null>(null);
@@ -1084,6 +1220,9 @@ export default function App() {
         const data = await response.json().catch(() => null);
         if (cancelled || !response.ok || !data?.email) return;
         setEmail(String(data.email));
+        setDisplayName(
+          typeof data.name === "string" && data.name.trim() ? data.name.trim() : null,
+        );
       } catch {
         // Stay on the sign-in form when the backend is down.
       } finally {
@@ -1140,9 +1279,15 @@ export default function App() {
     };
   }, [email]);
 
+  function applyAuth(user: AuthUser) {
+    setEmail(user.email);
+    setDisplayName(user.name);
+  }
+
   async function signOut() {
     await fetch("/api/logout", { method: "POST" });
     setEmail(null);
+    setDisplayName(null);
     setLinked(null);
     setLinkToken(null);
     setTransactions([]);
@@ -1322,7 +1467,7 @@ export default function App() {
   if (!email) {
     return (
       <main>
-        <Login onLoggedIn={setEmail} />
+        <AuthScreens onLoggedIn={applyAuth} />
       </main>
     );
   }
@@ -1332,7 +1477,7 @@ export default function App() {
       <header className="top">
         <h1>Personal Copilot Finance Tracker</h1>
         <div className="account">
-          <span>{email}</span>
+          <span>{displayName || email}</span>
           <button type="button" className="secondary" onClick={signOut}>
             Sign out
           </button>
