@@ -1,5 +1,7 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
+import Markdown from "react-markdown";
 import { usePlaidLink } from "react-plaid-link";
+import remarkGfm from "remark-gfm";
 
 type Kind = "expense" | "income" | "transfer";
 
@@ -947,7 +949,13 @@ function AskChat({
             <span className="ask-role">
               {message.role === "user" ? "You" : "Assistant"}
             </span>
-            <p>{message.content}</p>
+            {message.role === "assistant" ? (
+              <div className="ask-markdown">
+                <Markdown remarkPlugins={[remarkGfm]}>{message.content}</Markdown>
+              </div>
+            ) : (
+              <p>{message.content}</p>
+            )}
           </div>
         ))}
         {sending && <p className="ask-loading">Thinking…</p>}
