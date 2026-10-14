@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "https://ai-finance-tracker-agjh.onrender.com/api/:path*"
+    }
+  ]
+}
