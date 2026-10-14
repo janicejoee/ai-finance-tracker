@@ -14,7 +14,7 @@ __pycache__/
 *.pyc
 
 # Frontend build
-frontend/build
+frontend/dist
 
 # IDE / OS
 .DS_Store
