@@ -1458,8 +1458,16 @@ export default function App() {
 
   if (!authChecked) {
     return (
-      <main>
-        <p>Loading…</p>
+      <main className="startup" role="status">
+        <p className="startup-kicker">
+          <span className="startup-dot" aria-hidden="true" />
+          First open can take a minute
+        </p>
+        <h1>The server is waking up from a nap.</h1>
+        <p>
+          This app runs on a free backend that sleeps when nobody is using it.
+          It is stretching, finding its shoes, and then it will load. Hang on.
+        </p>
       </main>
     );
   }
