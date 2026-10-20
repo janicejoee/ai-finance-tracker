@@ -1463,10 +1463,11 @@ export default function App() {
           <span className="startup-dot" aria-hidden="true" />
           First open can take a minute
         </p>
-        <h1>The server is waking up from a nap.</h1>
+        <h1>Waking up your personal treasurer.</h1>
         <p>
-          This app runs on a free backend that sleeps when nobody is using it.
-          It is stretching, finding its shoes, and then it will load. Hang on.
+          They are gathering the money and getting the books in order. The
+          free backend sleeps when nobody is using it, so this first open can
+          take a minute. Hang on.
         </p>
       </main>
     );
