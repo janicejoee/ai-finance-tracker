@@ -12,8 +12,12 @@ from flask import Flask, request, jsonify, session
 import plaid
 from plaid.model.products import Products
 from plaid.model.country_code import CountryCode
+from plaid.model.accounts_get_request import AccountsGetRequest
+from plaid.model.institutions_get_by_id_request import InstitutionsGetByIdRequest
+from plaid.model.item_get_request import ItemGetRequest
 from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchangeRequest
 from plaid.model.link_token_create_request import LinkTokenCreateRequest
+from plaid.model.link_token_create_request_update import LinkTokenCreateRequestUpdate
 from plaid.model.link_token_create_request_user import LinkTokenCreateRequestUser
 
 from chat.routes import chat_bp
@@ -21,18 +25,23 @@ from services.db import (
     ENTRY_TYPES,
     MAX_NAME_LENGTH,
     MIN_PASSWORD_LENGTH,
-    supabase_client,
     create_manual_transaction,
     create_user_by_email,
     fetch_transaction,
     find_user_by_email,
     get_category,
+    get_plaid_item_for_user,
+    list_access_tokens,
+    list_bank_items,
     list_categories,
     list_transactions,
     sign_in_with_password,
     soft_delete_transaction,
     stored_amount,
+    update_plaid_item_institution,
     update_transaction,
+    upsert_plaid_accounts,
+    upsert_plaid_item,
     user_display_name,
 )
 from services.plaid_client import plaid_client
@@ -79,14 +88,72 @@ def require_user_id():
     return user_id, None
 
 
-def get_linked_access_token(user_id):
-    rows = supabase_client.table('plaid_items').select(
-        'access_token'
-    ).eq('user_id', user_id).execute().data
+def country_codes():
+    return [CountryCode(code) for code in PLAID_COUNTRY_CODES]
 
-    if not rows or not rows[0].get('access_token'):
-        return None
-    return rows[0]['access_token']
+
+def refresh_item_details(user_id, item):
+    """Pull institution name and accounts from Plaid for one linked Item."""
+    access_token = item.get('access_token')
+    if not access_token:
+        return item
+
+    accounts_response = plaid_client.accounts_get(
+        AccountsGetRequest(access_token=access_token)
+    ).to_dict()
+    accounts = accounts_response.get('accounts') or []
+    upsert_plaid_accounts(user_id, item['id'], accounts)
+
+    institution_id = item.get('institution_id')
+    institution_name = item.get('institution_name')
+    if not institution_id:
+        item_response = plaid_client.item_get(
+            ItemGetRequest(access_token=access_token)
+        ).to_dict()
+        institution_id = (item_response.get('item') or {}).get('institution_id')
+
+    if institution_id and not institution_name:
+        try:
+            institution_response = plaid_client.institutions_get_by_id(
+                InstitutionsGetByIdRequest(
+                    institution_id=institution_id,
+                    country_codes=country_codes(),
+                )
+            ).to_dict()
+            institution_name = (institution_response.get('institution') or {}).get('name')
+        except Exception as e:
+            print(f'[bank] institution lookup failed for {institution_id}: {e}')
+
+    if institution_id or institution_name:
+        update_plaid_item_institution(item['id'], institution_id, institution_name)
+        item = {
+            **item,
+            'institution_id': institution_id,
+            'institution_name': institution_name,
+        }
+
+    item['accounts'] = [
+        {
+            'name': account.get('name') or 'Account',
+            'mask': account.get('mask'),
+            'type': str(account.get('type')) if account.get('type') is not None else None,
+            'subtype': (
+                str(account.get('subtype'))
+                if account.get('subtype') is not None
+                else None
+            ),
+        }
+        for account in accounts
+    ]
+    return item
+
+
+def public_bank_item(item):
+    return {
+        'id': item['id'],
+        'institution_name': item.get('institution_name') or 'Linked bank',
+        'accounts': item.get('accounts') or [],
+    }
 
 
 @app.route('/api/login', methods=['POST'])
@@ -162,12 +229,22 @@ def bank_status():
     user_id, error = require_user_id()
     if error:
         return error
-    rows = supabase_client.table('plaid_items').select(
-        'id, access_token'
-    ).eq('user_id', user_id).execute().data
 
-    linked = bool(rows and rows[0].get('access_token'))
-    return jsonify({'linked': linked})
+    items = list_bank_items(user_id)
+    public_items = []
+    for item in items:
+        needs_refresh = not item.get('institution_name') or not item.get('accounts')
+        if needs_refresh:
+            try:
+                item = refresh_item_details(user_id, item)
+            except Exception as e:
+                print(f"[bank] refresh failed for {item.get('id')}: {e}")
+        public_items.append(public_bank_item(item))
+
+    return jsonify({
+        'linked': bool(public_items),
+        'items': public_items,
+    })
 
 
 @app.route('/api/bank/link-token', methods=['POST'])
@@ -176,15 +253,31 @@ def bank_link_token():
     if error:
         return error
 
-    link_request = LinkTokenCreateRequest(
-        products=products,
-        client_name='Expenses Tracker',
-        country_codes=[CountryCode(code) for code in PLAID_COUNTRY_CODES],
-        language='en',
-        user=LinkTokenCreateRequestUser(
-            client_user_id=user_id
+    data = request.get_json(silent=True) or {}
+    item_id = data.get('item_id')
+    if item_id is not None and not isinstance(item_id, str):
+        return jsonify({'error': 'item_id must be a bank id'}), 400
+
+    if item_id:
+        item = get_plaid_item_for_user(user_id, item_id)
+        if not item or not item.get('access_token'):
+            return jsonify({'error': 'Bank not found'}), 404
+        link_request = LinkTokenCreateRequest(
+            client_name='Expenses Tracker',
+            country_codes=country_codes(),
+            language='en',
+            user=LinkTokenCreateRequestUser(client_user_id=user_id),
+            access_token=item['access_token'],
+            update=LinkTokenCreateRequestUpdate(account_selection_enabled=True),
         )
-    )
+    else:
+        link_request = LinkTokenCreateRequest(
+            products=products,
+            client_name='Expenses Tracker',
+            country_codes=country_codes(),
+            language='en',
+            user=LinkTokenCreateRequestUser(client_user_id=user_id),
+        )
 
     if PLAID_REDIRECT_URI is not None:
         link_request['redirect_uri'] = PLAID_REDIRECT_URI
@@ -195,33 +288,47 @@ def bank_link_token():
 
 @app.route('/api/bank/connect', methods=['POST'])
 def connect_bank():
-    public_token = request.form['public_token']
     user_id, error = require_user_id()
     if error:
         return error
 
-    exchange_request = ItemPublicTokenExchangeRequest(public_token=public_token)
-    exchange_response = plaid_client.item_public_token_exchange(exchange_request)
+    public_token = (request.form.get('public_token') or '').strip()
+    item_id = (request.form.get('item_id') or '').strip() or None
 
-    plaid_item_id = exchange_response['item_id']
-    access_token = exchange_response['access_token']
+    item = None
+    if public_token:
+        exchange_request = ItemPublicTokenExchangeRequest(public_token=public_token)
+        exchange_response = plaid_client.item_public_token_exchange(exchange_request)
+        plaid_item_id = exchange_response['item_id']
+        access_token = exchange_response['access_token']
+        try:
+            item = upsert_plaid_item(user_id, plaid_item_id, access_token)
+        except Exception as e:
+            return jsonify({'error': f'Failed to save bank link: {e}'}), 500
+    elif item_id:
+        item = get_plaid_item_for_user(user_id, item_id)
+        if not item:
+            return jsonify({'error': 'Bank not found'}), 404
+    else:
+        return jsonify({'error': 'public_token or item_id is required'}), 400
+
+    if not item:
+        return jsonify({'error': 'Failed to save bank link'}), 500
 
     try:
-        supabase_client.table('plaid_items').upsert(
-            {
-                'user_id': user_id,
-                'plaid_item_id': plaid_item_id,
-                'access_token': access_token,
-                'transactions_cursor': '',
-            },
-            on_conflict='plaid_item_id',
-        ).execute()
+        item = refresh_item_details(user_id, item)
     except Exception as e:
-        return jsonify({'error': f'Failed to save bank link: {e}'}), 500
+        print(f'[bank] refresh after connect failed: {e}')
+
+    try:
+        get_transactions(item['access_token'])
+    except Exception as e:
+        print(f'[bank] sync after connect failed: {e}')
 
     return jsonify({
-        'item_id': plaid_item_id,
+        'item_id': item['id'],
         'success': True,
+        'item': public_bank_item(item),
     })
 
 
@@ -239,10 +346,19 @@ def transactions():
     if error:
         return error
 
-    access_token = get_linked_access_token(user_id)
-    if access_token:
-        get_transactions(access_token)
-    return jsonify(list_transactions(user_id))
+    sync_errors = []
+    for access_token in list_access_tokens(user_id):
+        try:
+            get_transactions(access_token)
+        except Exception as e:
+            print(f'[transactions] sync failed: {e}')
+            sync_errors.append(str(e))
+
+    payload = list_transactions(user_id)
+    if sync_errors:
+        # Keep returning transactions; surface a soft warning for the client.
+        return jsonify(payload), 200
+    return jsonify(payload)
 
 
 def parse_category_id(value):

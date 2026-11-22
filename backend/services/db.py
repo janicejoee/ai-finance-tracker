@@ -288,3 +288,140 @@ def soft_delete_transaction(user_id, plaid_transaction_id):
         .execute()
     )
     return bool(result.data)
+
+
+def list_access_tokens(user_id):
+    rows = (
+        supabase_client.table('plaid_items')
+        .select('access_token')
+        .eq('user_id', user_id)
+        .execute()
+        .data
+        or []
+    )
+    return [row['access_token'] for row in rows if row.get('access_token')]
+
+
+def get_plaid_item_for_user(user_id, item_id):
+    result = (
+        supabase_client.table('plaid_items')
+        .select('id, user_id, plaid_item_id, access_token, institution_id, institution_name')
+        .eq('user_id', user_id)
+        .eq('id', item_id)
+        .limit(1)
+        .execute()
+    )
+    rows = result.data or []
+    return rows[0] if rows else None
+
+
+def get_plaid_item_by_plaid_item_id(user_id, plaid_item_id):
+    result = (
+        supabase_client.table('plaid_items')
+        .select('id, user_id, plaid_item_id, access_token, institution_id, institution_name')
+        .eq('user_id', user_id)
+        .eq('plaid_item_id', plaid_item_id)
+        .limit(1)
+        .execute()
+    )
+    rows = result.data or []
+    return rows[0] if rows else None
+
+
+def upsert_plaid_item(user_id, plaid_item_id, access_token):
+    """Save a bank link without resetting an existing sync cursor."""
+    supabase_client.table('plaid_items').upsert(
+        {
+            'user_id': user_id,
+            'plaid_item_id': plaid_item_id,
+            'access_token': access_token,
+        },
+        on_conflict='plaid_item_id',
+    ).execute()
+    return get_plaid_item_by_plaid_item_id(user_id, plaid_item_id)
+
+
+def update_plaid_item_institution(item_id, institution_id, institution_name):
+    supabase_client.table('plaid_items').update({
+        'institution_id': institution_id,
+        'institution_name': institution_name,
+    }).eq('id', item_id).execute()
+
+
+def upsert_plaid_accounts(user_id, item_id, accounts):
+    if not accounts:
+        return
+    rows = []
+    for account in accounts:
+        plaid_account_id = account.get('account_id') or account.get('plaid_account_id')
+        if not plaid_account_id:
+            continue
+        rows.append({
+            'user_id': user_id,
+            'item_id': item_id,
+            'plaid_account_id': plaid_account_id,
+            'name': account.get('name') or 'Account',
+            'mask': account.get('mask'),
+            'type': _plaid_enum_str(account.get('type')),
+            'subtype': _plaid_enum_str(account.get('subtype')),
+        })
+    if not rows:
+        return
+    supabase_client.table('plaid_accounts').upsert(
+        rows,
+        on_conflict='plaid_account_id',
+    ).execute()
+
+
+def _plaid_enum_str(value):
+    if value is None:
+        return None
+    if hasattr(value, 'value'):
+        return str(value.value)
+    return str(value)
+
+
+def list_bank_items(user_id):
+    items = (
+        supabase_client.table('plaid_items')
+        .select('id, access_token, institution_id, institution_name, created_at')
+        .eq('user_id', user_id)
+        .order('created_at')
+        .execute()
+        .data
+        or []
+    )
+    if not items:
+        return []
+
+    item_ids = [item['id'] for item in items]
+    accounts = (
+        supabase_client.table('plaid_accounts')
+        .select('item_id, name, mask, type, subtype')
+        .eq('user_id', user_id)
+        .in_('item_id', item_ids)
+        .order('name')
+        .execute()
+        .data
+        or []
+    )
+    accounts_by_item = {}
+    for account in accounts:
+        accounts_by_item.setdefault(account['item_id'], []).append({
+            'name': account.get('name') or 'Account',
+            'mask': account.get('mask'),
+            'type': account.get('type'),
+            'subtype': account.get('subtype'),
+        })
+
+    return [
+        {
+            'id': item['id'],
+            'access_token': item.get('access_token'),
+            'institution_id': item.get('institution_id'),
+            'institution_name': item.get('institution_name'),
+            'accounts': accounts_by_item.get(item['id'], []),
+        }
+        for item in items
+        if item.get('access_token')
+    ]

@@ -75,11 +75,11 @@ Routes other than login and signup require a signed-in Flask session cookie.
 | `POST` | `/api/login` | Sign in with `email` and `password` |
 | `POST` | `/api/logout` | Clear the session |
 | `GET` | `/api/session` | Current user's email and name |
-| `GET` | `/api/bank` | Whether a bank is linked |
-| `POST` | `/api/bank/link-token` | Create a Plaid Link token |
-| `POST` | `/api/bank/connect` | Exchange the Link `public_token` (form field) and save the bank |
+| `GET` | `/api/bank` | Linked banks and accounts (`linked`, `items`) |
+| `POST` | `/api/bank/link-token` | Create a Plaid Link token; optional JSON `item_id` starts update mode to add accounts on that bank |
+| `POST` | `/api/bank/connect` | Exchange a new Link `public_token`, or refresh an existing bank with form `item_id` when update mode returns no token |
 | `GET` | `/api/categories` | List categories in display order |
-| `GET` | `/api/transactions` | List the user's transactions; sync from Plaid first when a bank is linked |
+| `GET` | `/api/transactions` | List the user's transactions; sync from every linked bank first |
 | `POST` | `/api/transactions` | Create a manual transaction (`name`, `amount`, `date`, `entry_type`, optional `category_id`) |
 | `PATCH` | `/api/transactions/<plaid_transaction_id>` | Update `approved`, `category_id`, `name`, `date`, `entry_type`, and/or `amount` |
 | `DELETE` | `/api/transactions/<plaid_transaction_id>` | Soft-delete a transaction |

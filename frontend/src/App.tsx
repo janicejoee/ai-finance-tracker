@@ -10,6 +10,19 @@ type Category = {
   name: string;
 };
 
+type BankAccount = {
+  name: string;
+  mask: string | null;
+  type: string | null;
+  subtype: string | null;
+};
+
+type BankItem = {
+  id: string;
+  institutionName: string;
+  accounts: BankAccount[];
+};
+
 type Transaction = {
   id: string;
   name: string;
@@ -20,6 +33,9 @@ type Transaction = {
   categoryId: string | null;
   categoryName: string | null;
 };
+
+const LINK_TOKEN_KEY = "link_token";
+const LINK_ITEM_ID_KEY = "link_item_id";
 
 function errorText(data: unknown, fallback: string) {
   if (!data || typeof data !== "object") return fallback;
@@ -69,6 +85,56 @@ function parseTransactions(data: unknown): Transaction[] {
     const tx = parseTransaction(item);
     return tx ? [tx] : [];
   });
+}
+
+function parseBankAccount(data: unknown): BankAccount | null {
+  if (!data || typeof data !== "object") return null;
+  const row = data as Record<string, unknown>;
+  if (typeof row.name !== "string") return null;
+  return {
+    name: row.name,
+    mask: typeof row.mask === "string" ? row.mask : null,
+    type: typeof row.type === "string" ? row.type : null,
+    subtype: typeof row.subtype === "string" ? row.subtype : null,
+  };
+}
+
+function parseBankItem(data: unknown): BankItem | null {
+  if (!data || typeof data !== "object") return null;
+  const row = data as Record<string, unknown>;
+  if (typeof row.id !== "string") return null;
+  const accounts = Array.isArray(row.accounts)
+    ? row.accounts.flatMap((account) => {
+        const parsed = parseBankAccount(account);
+        return parsed ? [parsed] : [];
+      })
+    : [];
+  return {
+    id: row.id,
+    institutionName:
+      typeof row.institution_name === "string" && row.institution_name.trim()
+        ? row.institution_name.trim()
+        : "Linked bank",
+    accounts,
+  };
+}
+
+function parseBankItems(data: unknown): BankItem[] {
+  if (!data || typeof data !== "object") return [];
+  const body = data as Record<string, unknown>;
+  if (!Array.isArray(body.items)) return [];
+  return body.items.flatMap((item) => {
+    const parsed = parseBankItem(item);
+    return parsed ? [parsed] : [];
+  });
+}
+
+function accountLabel(account: BankAccount) {
+  const parts = [account.name];
+  if (account.mask) parts.push(`••••${account.mask}`);
+  if (account.subtype) parts.push(formatCategory(account.subtype));
+  else if (account.type) parts.push(formatCategory(account.type));
+  return parts.join(" · ");
 }
 
 function todayKey() {
@@ -1130,14 +1196,22 @@ function AskChat({
   );
 }
 
-function Connect({
+function PlaidConnect({
   token,
+  itemId,
+  label,
+  hideButton = false,
   onLinked,
   onError,
+  onSettled,
 }: {
   token: string;
+  itemId?: string | null;
+  label: string;
+  hideButton?: boolean;
   onLinked: () => void;
   onError: (message: string) => void;
+  onSettled?: () => void;
 }) {
   const oauth = window.location.href.includes("?oauth_state_id=");
 
@@ -1145,32 +1219,144 @@ function Connect({
     token,
     receivedRedirectUri: oauth ? window.location.href : undefined,
     onSuccess: async (publicToken) => {
+      const body = new URLSearchParams();
+      if (publicToken) body.set("public_token", publicToken);
+      if (itemId) body.set("item_id", itemId);
       const response = await fetch("/api/bank/connect", {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({ public_token: publicToken }),
+        body,
       });
       const data = await response.json().catch(() => null);
       if (!response.ok) {
         onError(errorText(data, "Could not save the bank link"));
+        onSettled?.();
         return;
       }
+      localStorage.removeItem(LINK_TOKEN_KEY);
+      localStorage.removeItem(LINK_ITEM_ID_KEY);
       window.history.replaceState("", "", "/");
       onLinked();
+      onSettled?.();
     },
     onExit: (error) => {
       if (error?.error_message) onError(error.error_message);
+      onSettled?.();
     },
   });
 
   useEffect(() => {
-    if (oauth && ready) open();
-  }, [oauth, ready, open]);
+    if (ready) open();
+  }, [ready, open]);
+
+  if (hideButton) return null;
 
   return (
-    <button type="button" className="connect" onClick={() => open()} disabled={!ready}>
-      {ready ? "Connect bank" : "Loading…"}
+    <button
+      type="button"
+      className="connect"
+      onClick={() => open()}
+      disabled={!ready}
+    >
+      {ready ? label : "Loading…"}
     </button>
+  );
+}
+
+function BanksPanel({
+  items,
+  linkingToken,
+  linkingItemId,
+  linkingLabel,
+  linkingBusy,
+  onAddBank,
+  onAddAccounts,
+  onLinked,
+  onError,
+  onLinkSettled,
+}: {
+  items: BankItem[];
+  linkingToken: string | null;
+  linkingItemId: string | null;
+  linkingLabel: string;
+  linkingBusy: boolean;
+  onAddBank: () => void;
+  onAddAccounts: (itemId: string) => void;
+  onLinked: () => void;
+  onError: (message: string) => void;
+  onLinkSettled: () => void;
+}) {
+  const oauth = window.location.href.includes("?oauth_state_id=");
+  const showInitialConnect = items.length === 0;
+
+  return (
+    <section className="banks" aria-label="Bank connections">
+      {items.length > 0 && (
+        <>
+          <div className="banks-header">
+            <h2>Banks</h2>
+            <button
+              type="button"
+              className="secondary"
+              onClick={onAddBank}
+              disabled={linkingBusy}
+            >
+              Add a bank
+            </button>
+          </div>
+          <ul className="bank-list">
+            {items.map((item) => (
+              <li key={item.id}>
+                <div className="bank-item-top">
+                  <strong>{item.institutionName}</strong>
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => onAddAccounts(item.id)}
+                    disabled={linkingBusy}
+                  >
+                    Add accounts
+                  </button>
+                </div>
+                {item.accounts.length > 0 ? (
+                  <ul className="account-list">
+                    {item.accounts.map((account) => (
+                      <li key={`${item.id}-${account.name}-${account.mask ?? ""}`}>
+                        {accountLabel(account)}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="bank-empty">No accounts synced yet.</p>
+                )}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      {linkingToken && (
+        <PlaidConnect
+          key={`${linkingToken}-${linkingItemId ?? "new"}`}
+          token={linkingToken}
+          itemId={linkingItemId}
+          label={showInitialConnect ? "Connect bank" : linkingLabel}
+          hideButton={!showInitialConnect && !oauth}
+          onLinked={onLinked}
+          onError={onError}
+          onSettled={onLinkSettled}
+        />
+      )}
+      {!linkingToken && showInitialConnect && (
+        <button
+          type="button"
+          className="connect"
+          onClick={onAddBank}
+          disabled={linkingBusy}
+        >
+          {linkingBusy ? "Loading…" : "Connect bank"}
+        </button>
+      )}
+    </section>
   );
 }
 
@@ -1178,8 +1364,12 @@ export default function App() {
   const [email, setEmail] = useState<string | null>(null);
   const [displayName, setDisplayName] = useState<string | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
-  const [linked, setLinked] = useState<boolean | null>(null);
+  const [banksLoaded, setBanksLoaded] = useState(false);
+  const [bankItems, setBankItems] = useState<BankItem[]>([]);
   const [linkToken, setLinkToken] = useState<string | null>(null);
+  const [linkItemId, setLinkItemId] = useState<string | null>(null);
+  const [linkLabel, setLinkLabel] = useState("Connect bank");
+  const [linkingBusy, setLinkingBusy] = useState(false);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [savingIds, setSavingIds] = useState<ReadonlySet<string>>(new Set());
@@ -1212,6 +1402,43 @@ export default function App() {
     }
   }, []);
 
+  const loadBanks = useCallback(async (signal?: AbortSignal) => {
+    const response = await fetch("/api/bank", { signal });
+    const data = await response.json().catch(() => null);
+    if (signal?.aborted) return;
+    if (!response.ok) {
+      throw new Error(errorText(data, "Could not load banks"));
+    }
+    setBankItems(parseBankItems(data));
+    setBanksLoaded(true);
+  }, []);
+
+  const startLink = useCallback(async (itemId?: string | null) => {
+    setLinkingBusy(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/bank/link-token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(itemId ? { item_id: itemId } : {}),
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok || !data?.link_token) {
+        throw new Error(errorText(data, "Could not start bank link"));
+      }
+      const token = String(data.link_token);
+      localStorage.setItem(LINK_TOKEN_KEY, token);
+      if (itemId) localStorage.setItem(LINK_ITEM_ID_KEY, itemId);
+      else localStorage.removeItem(LINK_ITEM_ID_KEY);
+      setLinkItemId(itemId ?? null);
+      setLinkLabel(itemId ? "Add accounts" : "Add a bank");
+      setLinkToken(token);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not start bank link");
+      setLinkingBusy(false);
+    }
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -1239,37 +1466,22 @@ export default function App() {
 
     const oauth = window.location.href.includes("?oauth_state_id=");
     if (oauth) {
-      setLinkToken(localStorage.getItem("link_token"));
-      setLinked(false);
-      return;
+      const savedToken = localStorage.getItem(LINK_TOKEN_KEY);
+      const savedItemId = localStorage.getItem(LINK_ITEM_ID_KEY);
+      setLinkToken(savedToken);
+      setLinkItemId(savedItemId);
+      setLinkLabel(savedItemId ? "Add accounts" : "Connect bank");
+      setLinkingBusy(Boolean(savedToken));
     }
 
     let cancelled = false;
     (async () => {
       try {
-        const statusRes = await fetch("/api/bank");
-        const status = await statusRes.json();
-        if (cancelled) return;
-        if (statusRes.ok && status.linked) {
-          setLinked(true);
-          return;
-        }
-
-        const tokenRes = await fetch("/api/bank/link-token", { method: "POST" });
-        const tokenData = await tokenRes.json();
-        if (cancelled) return;
-        if (!tokenRes.ok || !tokenData.link_token) {
-          setError(errorText(tokenData, "Could not start bank link"));
-          setLinked(false);
-          return;
-        }
-        localStorage.setItem("link_token", tokenData.link_token);
-        setLinkToken(tokenData.link_token);
-        setLinked(false);
+        await loadBanks();
       } catch {
         if (!cancelled) {
           setError("Backend not reachable");
-          setLinked(false);
+          setBanksLoaded(true);
         }
       }
     })();
@@ -1277,7 +1489,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [email]);
+  }, [email, loadBanks]);
 
   function applyAuth(user: AuthUser) {
     setEmail(user.email);
@@ -1288,8 +1500,12 @@ export default function App() {
     await fetch("/api/logout", { method: "POST" });
     setEmail(null);
     setDisplayName(null);
-    setLinked(null);
+    setBanksLoaded(false);
+    setBankItems([]);
     setLinkToken(null);
+    setLinkItemId(null);
+    setLinkLabel("Connect bank");
+    setLinkingBusy(false);
     setTransactions([]);
     setCategories([]);
     setSavingIds(new Set());
@@ -1297,6 +1513,17 @@ export default function App() {
     setPage("home");
     setMonth(currentMonthKey());
     setError(null);
+    localStorage.removeItem(LINK_TOKEN_KEY);
+    localStorage.removeItem(LINK_ITEM_ID_KEY);
+  }
+
+  function handleBankLinked() {
+    window.location.reload();
+  }
+
+  function handleLinkSettled() {
+    setLinkingBusy(false);
+    setLinkToken(null);
   }
 
   async function toggleApproved(transaction: Transaction) {
@@ -1450,11 +1677,11 @@ export default function App() {
   }, [email]);
 
   useEffect(() => {
-    if (linked === null) return;
+    if (!banksLoaded) return;
     const controller = new AbortController();
     loadTransactions(controller.signal);
     return () => controller.abort();
-  }, [linked, loadTransactions]);
+  }, [banksLoaded, loadTransactions]);
 
   if (!authChecked) {
     return (
@@ -1493,16 +1720,21 @@ export default function App() {
         </div>
       </header>
       {error && <p className="error">{error}</p>}
-      {linked === null && <p>Loading…</p>}
-      {linked !== null && (
+      {!banksLoaded && <p>Loading…</p>}
+      {banksLoaded && (
         <>
-          {linked === false && linkToken && (
-            <Connect
-              token={linkToken}
-              onLinked={() => setLinked(true)}
-              onError={setError}
-            />
-          )}
+          <BanksPanel
+            items={bankItems}
+            linkingToken={linkToken}
+            linkingItemId={linkItemId}
+            linkingLabel={linkLabel}
+            linkingBusy={linkingBusy}
+            onAddBank={() => void startLink()}
+            onAddAccounts={(itemId) => void startLink(itemId)}
+            onLinked={handleBankLinked}
+            onError={setError}
+            onLinkSettled={handleLinkSettled}
+          />
           <nav className="pages" aria-label="Sections">
             <button
               type="button"

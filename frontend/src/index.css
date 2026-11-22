@@ -353,6 +353,64 @@ section {
   border-radius: 10px;
 }
 
+section.banks {
+  margin-top: 0;
+  margin-bottom: 1rem;
+  padding-bottom: 0.85rem;
+}
+
+.banks-header,
+.bank-item-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.banks-header {
+  margin-bottom: 0.65rem;
+}
+
+.banks-header h2 {
+  margin: 0;
+}
+
+.bank-list,
+.account-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.bank-list > li + li {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid #eee;
+}
+
+.account-list {
+  margin-top: 0.45rem;
+}
+
+.account-list li,
+.bank-empty {
+  color: #555;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.account-list li + li {
+  margin-top: 0.2rem;
+}
+
+.bank-empty {
+  margin: 0.45rem 0 0;
+}
+
+section.banks .connect {
+  margin-top: 0.75rem;
+}
+
 .section-title {
   display: flex;
   justify-content: space-between;
