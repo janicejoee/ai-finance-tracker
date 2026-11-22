@@ -3,7 +3,7 @@ import Markdown from "react-markdown";
 import { usePlaidLink } from "react-plaid-link";
 import remarkGfm from "remark-gfm";
 
-type Kind = "expense" | "income" | "transfer";
+type Kind = "expense" | "income" | "transfer" | "reimbursement";
 
 type Category = {
   id: string;
@@ -49,7 +49,9 @@ function errorText(data: unknown, fallback: string) {
 }
 
 function parseKind(value: unknown): Kind {
-  if (value === "income" || value === "transfer") return value;
+  if (value === "income" || value === "transfer" || value === "reimbursement") {
+    return value;
+  }
   return "expense";
 }
 
@@ -156,6 +158,43 @@ function formatAmount(amount: number) {
   return amount > 0 ? `−${formatted}` : `+${formatted}`;
 }
 
+function splitAmount(amountText: string, parts: number) {
+  const value = Number(amountText);
+  if (!Number.isFinite(value) || value <= 0 || parts < 2) return null;
+  return (Math.round((value / parts) * 100) / 100).toFixed(2);
+}
+
+function SplitAmountButtons({
+  amount,
+  disabled,
+  onSplit,
+}: {
+  amount: string;
+  disabled?: boolean;
+  onSplit: (next: string) => void;
+}) {
+  return (
+    <div className="split-amount" role="group" aria-label="Split amount equally">
+      <span className="split-label">Split</span>
+      {[2, 3, 4].map((parts) => (
+        <button
+          key={parts}
+          type="button"
+          className="secondary"
+          disabled={disabled}
+          onClick={() => {
+            const next = splitAmount(amount, parts);
+            if (next == null) return;
+            onSplit(next);
+          }}
+        >
+          ÷{parts}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 type CategoryGroup = {
   category: string;
   count: number;
@@ -210,7 +249,7 @@ function summarizeMonth(rows: Transaction[], month: string) {
   for (const tx of rows) {
     if (!tx.approved || tx.date.slice(0, 7) !== month) continue;
     const kind = kindOf(tx);
-    if (kind === "expense") expenses += tx.amount;
+    if (kind === "expense" || kind === "reimbursement") expenses += tx.amount;
     else if (kind === "income") income += Math.abs(tx.amount);
   }
   return { expenses, income };
@@ -219,7 +258,8 @@ function summarizeMonth(rows: Transaction[], month: string) {
 function expenseGroups(rows: Transaction[]): CategoryGroup[] {
   const byCategory = new Map<string, CategoryGroup>();
   for (const tx of rows) {
-    if (kindOf(tx) !== "expense") continue;
+    const kind = kindOf(tx);
+    if (kind !== "expense" && kind !== "reimbursement") continue;
     const category = categoryLabel(tx);
     const group = byCategory.get(category);
     if (group) {
@@ -317,6 +357,7 @@ function CategoryEditor({
 }) {
   const known = categories.some((category) => category.id === transaction.categoryId);
   const value = transaction.categoryId && known ? transaction.categoryId : "";
+  const requiresCategory = kindOf(transaction) === "reimbursement";
 
   return (
     <div className="category-editor">
@@ -327,11 +368,14 @@ function CategoryEditor({
         value={value}
         onChange={(event) => {
           const next = event.target.value || null;
+          if (requiresCategory && !next) return;
           if (next === (transaction.categoryId ?? null)) return;
           onSave(transaction, next);
         }}
       >
-        <option value="">Uncategorized</option>
+        <option value="" disabled={requiresCategory}>
+          {requiresCategory ? "Select a category" : "Uncategorized"}
+        </option>
         {categories.map((category) => (
           <option key={category.id} value={category.id}>
             {category.name}
@@ -394,6 +438,10 @@ function ManualEntryForm({
     const value = Number(amount);
     if (!trimmed || !Number.isFinite(value) || value <= 0) {
       onError("Enter a name and a positive amount");
+      return;
+    }
+    if (entryType === "reimbursement" && !categoryId) {
+      onError("Choose a category for the reimbursement");
       return;
     }
     setSubmitting(true);
@@ -485,6 +533,11 @@ function ManualEntryForm({
                     onChange={(event) => setAmount(event.target.value)}
                     required
                   />
+                  <SplitAmountButtons
+                    amount={amount}
+                    disabled={submitting}
+                    onSplit={setAmount}
+                  />
                 </label>
                 <label>
                   Date
@@ -505,6 +558,7 @@ function ManualEntryForm({
                   >
                     <option value="expense">Expense</option>
                     <option value="income">Income</option>
+                    <option value="reimbursement">Reimbursement</option>
                     <option value="transfer">Transfer</option>
                   </select>
                 </label>
@@ -514,8 +568,13 @@ function ManualEntryForm({
                     name="category_id"
                     value={categoryId}
                     onChange={(event) => setCategoryId(event.target.value)}
+                    required={entryType === "reimbursement"}
                   >
-                    <option value="">Uncategorized</option>
+                    <option value="">
+                      {entryType === "reimbursement"
+                        ? "Select a category"
+                        : "Uncategorized"}
+                    </option>
                     {categories.map((category) => (
                       <option key={category.id} value={category.id}>
                         {category.name}
@@ -547,11 +606,13 @@ function ManualEntryForm({
 
 function EditTransactionForm({
   transaction,
+  categories,
   onSaved,
   onClose,
   onError,
 }: {
   transaction: Transaction;
+  categories: Category[];
   onSaved: (transaction: Transaction) => void;
   onClose: () => void;
   onError: (message: string | null) => void;
@@ -560,6 +621,12 @@ function EditTransactionForm({
   const [amount, setAmount] = useState(String(Math.abs(transaction.amount)));
   const [date, setDate] = useState(transaction.date);
   const [entryType, setEntryType] = useState<Kind>(transaction.entryType);
+  const knownCategory = categories.some(
+    (category) => category.id === transaction.categoryId,
+  );
+  const [categoryId, setCategoryId] = useState(
+    transaction.categoryId && knownCategory ? transaction.categoryId : "",
+  );
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
@@ -579,20 +646,26 @@ function EditTransactionForm({
       onError("Enter a name and a positive amount");
       return;
     }
+    if (entryType === "reimbursement" && !categoryId) {
+      onError("Choose a category for the reimbursement");
+      return;
+    }
     setSubmitting(true);
     onError(null);
     try {
+      const body: Record<string, unknown> = {
+        name: trimmed,
+        amount: value,
+        date,
+        entry_type: entryType,
+        category_id: categoryId || null,
+      };
       const response = await fetch(
         `/api/transactions/${encodeURIComponent(transaction.id)}`,
         {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            name: trimmed,
-            amount: value,
-            date,
-            entry_type: entryType,
-          }),
+          body: JSON.stringify(body),
         },
       );
       const data = await response.json().catch(() => null);
@@ -665,6 +738,11 @@ function EditTransactionForm({
                 onChange={(event) => setAmount(event.target.value)}
                 required
               />
+              <SplitAmountButtons
+                amount={amount}
+                disabled={submitting}
+                onSplit={setAmount}
+              />
             </label>
             <label>
               Date
@@ -685,7 +763,28 @@ function EditTransactionForm({
               >
                 <option value="expense">Expense</option>
                 <option value="income">Income</option>
+                <option value="reimbursement">Reimbursement</option>
                 <option value="transfer">Transfer</option>
+              </select>
+            </label>
+            <label>
+              Category
+              <select
+                name="category_id"
+                value={categoryId}
+                onChange={(event) => setCategoryId(event.target.value)}
+                required={entryType === "reimbursement"}
+              >
+                <option value="">
+                  {entryType === "reimbursement"
+                    ? "Select a category"
+                    : "Uncategorized"}
+                </option>
+                {categories.map((category) => (
+                  <option key={category.id} value={category.id}>
+                    {category.name}
+                  </option>
+                ))}
               </select>
             </label>
           </div>
@@ -735,7 +834,12 @@ function UpdatesFeed({
           {rows.map((tx) => (
             <li key={tx.id || `${tx.date}-${tx.name}`}>
               <div>
-                <p className="name">{tx.name}</p>
+                <p className="name">
+                  {tx.name}
+                  {kindOf(tx) === "reimbursement" && (
+                    <span className="kind-tag">Reimbursement</span>
+                  )}
+                </p>
                 <span className="date">{tx.date}</span>
                 <CategoryEditor
                   transaction={tx}
@@ -817,7 +921,12 @@ function TransactionTable({
             {rows.map((tx) => (
               <tr key={tx.id || `${tx.date}-${tx.name}`}>
                 <td>
-                  <p className="name">{tx.name}</p>
+                  <p className="name">
+                    {tx.name}
+                    {kindOf(tx) === "reimbursement" && (
+                      <span className="kind-tag">Reimbursement</span>
+                    )}
+                  </p>
                   <span className="date">{tx.date}</span>
                   <CategoryEditor
                     transaction={tx}
@@ -1381,7 +1490,9 @@ export default function App() {
   const waiting = transactions.filter((tx) => !tx.approved);
   const approved = transactions.filter((tx) => tx.approved && tx.date.slice(0, 7) === month);
   const income = approved.filter((tx) => kindOf(tx) === "income");
-  const expenses = approved.filter((tx) => kindOf(tx) === "expense");
+  const expenses = approved.filter(
+    (tx) => kindOf(tx) === "expense" || kindOf(tx) === "reimbursement",
+  );
   const transfers = approved.filter((tx) => kindOf(tx) === "transfer");
   const loadTransactions = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
@@ -1798,6 +1909,7 @@ export default function App() {
             <EditTransactionForm
               key={editing.id}
               transaction={editing}
+              categories={categories}
               onSaved={(updated) =>
                 setTransactions((current) =>
                   current.map((row) =>

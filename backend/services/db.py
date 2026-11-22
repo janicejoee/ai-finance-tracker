@@ -26,7 +26,7 @@ CARD_PAYMENT_NAME = re.compile(r'payment\s*-?\s*thank', re.IGNORECASE)
 TRANSACTION_LIST_SELECT = (
     'plaid_transaction_id, name, merchant_name, amount, date, approved, entry_type, category_id'
 )
-ENTRY_TYPES = {'expense', 'income', 'transfer'}
+ENTRY_TYPES = {'expense', 'income', 'transfer', 'reimbursement'}
 
 def find_user_by_email(email):
     target = email.strip().lower()
@@ -226,7 +226,7 @@ def list_transactions(user_id):
     return with_category_names(result.data or [])
 
 def stored_amount(amount, entry_type):
-    return -abs(amount) if entry_type == 'income' else abs(amount)
+    return -abs(amount) if entry_type in ('income', 'reimbursement') else abs(amount)
 
 def fetch_transaction(user_id, plaid_transaction_id):
     result = (

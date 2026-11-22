@@ -110,12 +110,17 @@ def search_transactions(
     limit = max(1, min(int(limit), 20))
     q = (
         sb.table("transactions")
-        .select("date, name, merchant_name, amount, category_id")
+        .select("date, name, merchant_name, amount, category_id, entry_type")
         .eq("user_id", user_id)
-        .eq("entry_type", "expense")
         .eq("approved", True)
         .is_("deleted_at", "null")
     )
+    # Category lists include reimbursements so paybacks show up; merchant
+    # and unfiltered searches stay expenses-only.
+    if category:
+        q = q.in_("entry_type", ["expense", "reimbursement"])
+    else:
+        q = q.eq("entry_type", "expense")
 
     if start_date and end_date:
         s, e = parse_dates(start_date, end_date)
@@ -143,6 +148,7 @@ def search_transactions(
                 "merchant": r["merchant_name"] or r["name"],
                 "category": CATEGORY_NAME.get(r["category_id"], "Uncategorized"),
                 "amount": float(r["amount"]),
+                "entry_type": r.get("entry_type") or "expense",
             }
             for r in rows[:limit]
         ],

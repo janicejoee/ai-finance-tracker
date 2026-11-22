@@ -15,8 +15,11 @@ TOOL_SCHEMAS = [
         "name": "get_spending_summary",
         "description": (
             "Total expense spending over a date range, optionally grouped by "
-            "category or merchant. Excludes income, transfers, and unapproved "
-            "rows. Use for 'how much did I spend last month' or 'spending by category'."
+            "category or merchant. Category and overall totals are net of "
+            "reimbursements (friend paybacks assigned to a category). Merchant "
+            "grouping counts expenses only. Excludes income, transfers, and "
+            "unapproved rows. Use for 'how much did I spend last month' or "
+            "'spending by category'."
         ),
         "input_schema": {
             "type": "object",
@@ -45,9 +48,10 @@ TOOL_SCHEMAS = [
     {
         "name": "search_transactions",
         "description": (
-            "List individual expense transactions with optional filters. Returns "
-            "at most 20 rows; check the 'truncated' flag. Use for 'show my biggest "
-            "purchases' or 'what did I buy at X'."
+            "List individual expense transactions with optional filters. When "
+            "filtering by category, reimbursements in that category are included "
+            "(negative amounts). Returns at most 20 rows; check the 'truncated' "
+            "flag. Use for 'show my biggest purchases' or 'what did I buy at X'."
         ),
         "input_schema": {
             "type": "object",

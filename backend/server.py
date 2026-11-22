@@ -421,11 +421,13 @@ def create_transaction():
 
     entry_type = data.get('entry_type')
     if entry_type not in ENTRY_TYPES:
-        return jsonify({'error': 'entry_type must be expense, income, or transfer'}), 400
+        return jsonify({'error': 'entry_type must be expense, income, transfer, or reimbursement'}), 400
 
     category_id, category_error = parse_manual_category_id(data)
     if category_error:
         return category_error
+    if entry_type == 'reimbursement' and not category_id:
+        return jsonify({'error': 'reimbursement requires a category'}), 400
 
     created = create_manual_transaction(
         user_id,
@@ -464,7 +466,7 @@ def patch_transaction(plaid_transaction_id):
         fields['date'] = date
 
     if 'entry_type' in fields and fields['entry_type'] not in ENTRY_TYPES:
-        return jsonify({'error': 'entry_type must be expense, income, or transfer'}), 400
+        return jsonify({'error': 'entry_type must be expense, income, transfer, or reimbursement'}), 400
 
     if 'amount' in fields:
         amount, amount_error = parse_positive_amount(fields['amount'])
@@ -481,19 +483,37 @@ def patch_transaction(plaid_transaction_id):
             return jsonify({'error': 'Unknown category'}), 400
         fields['category_id'] = category_id
 
-    if 'amount' in fields or 'entry_type' in fields:
+    needs_current = (
+        'amount' in fields
+        or 'entry_type' in fields
+        or 'category_id' in fields
+    )
+    current = None
+    if needs_current:
         current = fetch_transaction(user_id, plaid_transaction_id)
         if not current:
             return jsonify({'error': 'Transaction not found'}), 404
+
+    if 'amount' in fields or 'entry_type' in fields:
         entry_type = fields.get('entry_type', current.get('entry_type'))
         if entry_type not in ENTRY_TYPES:
-            return jsonify({'error': 'entry_type must be expense, income, or transfer'}), 400
+            return jsonify({'error': 'entry_type must be expense, income, transfer, or reimbursement'}), 400
         if 'amount' in fields:
             magnitude = fields['amount']
         else:
             magnitude = abs(float(current['amount']))
         fields['amount'] = stored_amount(magnitude, entry_type)
         fields['entry_type'] = entry_type
+
+    entry_type = fields.get('entry_type', (current or {}).get('entry_type'))
+    if entry_type == 'reimbursement':
+        if current is None:
+            current = fetch_transaction(user_id, plaid_transaction_id)
+            if not current:
+                return jsonify({'error': 'Transaction not found'}), 404
+        category_id = fields['category_id'] if 'category_id' in fields else current.get('category_id')
+        if not category_id:
+            return jsonify({'error': 'reimbursement requires a category'}), 400
 
     result = update_transaction(user_id, plaid_transaction_id, fields)
     if not result:

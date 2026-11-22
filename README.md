@@ -6,15 +6,15 @@ Link a bank account, and new transactions land in an inbox. Give each one a cate
 
 ## How it works
 
-**Syncing.** Plaid Link connects the bank in the browser. The API exchanges the public token for an access token and stores it with your account. Opening the app or pressing Refresh calls Plaid's `/transactions/sync` with a saved cursor, so each sync brings only what was added, changed, or removed since the last one.
+**Syncing.** Plaid Link connects the bank in the browser. The API exchanges the public token for an access token and stores it with your account. You can link more than one bank, and use **Add accounts** on an existing connection to open Link in update mode and pick more accounts from that bank. After a successful connect, the app reloads so the banks panel and transactions refresh. Opening the app or pressing Refresh calls Plaid's `/transactions/sync` for every linked bank with a saved cursor, so each sync brings only what was added, changed, or removed since the last one.
 
-**Sorting.** Pending charges are skipped until they post. Each posted transaction is labeled an expense, income, or transfer based on Plaid's personal-finance category. Card payments and moves between accounts count as transfers, so paying a card isn't counted as spending twice. Money sent or received through apps like Zelle counts as an expense or income.
+**Sorting.** Pending charges are skipped until they post. Each posted transaction is labeled an expense, income, or transfer based on Plaid's personal-finance category. Card payments and moves between accounts count as transfers, so paying a card isn't counted as spending twice. Money sent or received through apps like Zelle counts as an expense or income. You can reclassify a payback as a **reimbursement** and assign it to an expense category so it reduces that category's total instead of counting as income.
 
-**Categories.** When a row is first inserted, a database trigger assigns a default category from `plaid_category_map`. Later syncs upsert on Plaid's transaction id and leave `category_id` and `approved` alone, so your choices survive bank updates. Transactions the bank removes are soft-deleted.
+**Categories.** When a row is first inserted, a database trigger assigns a default category from `plaid_category_map`. Later syncs upsert on Plaid's transaction id and leave `category_id` and `approved` alone, so your choices survive bank updates. Transactions the bank removes are soft-deleted. Reimbursements always need a category.
 
-**Reviewing.** You can use the tracker before linking a bank. Add a transaction by hand from Home or New Transactions; it stays unapproved until you check it off, same as a bank row. New Transactions lists everything not yet approved. Home shows one month at a time: total spending, total income, spending by category, and separate lists for income, expenses, and transfers. Connect a bank when you want synced rows; Refresh syncs only when a bank is linked.
+**Reviewing.** You can use the tracker before linking a bank. Add a transaction by hand from Home or New Transactions; it stays unapproved until you check it off, same as a bank row. On Add or Edit, Split buttons (÷2, ÷3, ÷4) divide the amount into equal shares—handy when you split a bill. New Transactions lists everything not yet approved. Home shows one month at a time: total spending (expenses net of reimbursements), total income, spending by category, and lists for income, expenses (including reimbursements), and transfers. A banks panel lists each linked institution and its accounts, with **Add a bank** and **Add accounts**. Connect a bank when you want synced rows; Refresh syncs only when at least one bank is linked.
 
-**Asking.** The Ask tab talks to Claude through the Flask API. The model never queries the database itself; it calls server-side tools that return approved expense totals, merchant matches, transaction lists, and period comparisons for the signed-in user only. Income, transfers, and unapproved inbox rows are excluded. The Anthropic API key and Supabase service-role key stay on the server.
+**Asking.** The Ask tab talks to Claude through the Flask API. The model never queries the database itself; it calls server-side tools that return approved expense totals net of category reimbursements, merchant matches, transaction lists, and period comparisons for the signed-in user only. Income, transfers, and unapproved inbox rows are excluded. The Anthropic API key and Supabase service-role key stay on the server.
 
 ## Stack
 
@@ -59,7 +59,7 @@ cd frontend
 npm start
 ```
 
-Open [http://localhost:3000](http://localhost:3000). Create an account with your name, email, and password, then connect a bank. In Sandbox, sign in to the bank with `user_good` / `pass_good`. For more realistic data, use `user_transactions_dynamic`.
+Open [http://localhost:3000](http://localhost:3000). Create an account with your name, email, and password, then connect a bank. Use **Add accounts** to include more accounts from that bank, or **Add a bank** for another institution. In Sandbox, sign in to the bank with `user_good` / `pass_good`. For more realistic data, use `user_transactions_dynamic`.
 
 For Ask, set `ANTHROPIC_API_KEY` in the backend environment (along with `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_ANON_KEY`, and `FLASK_SECRET_KEY`).
 
@@ -80,7 +80,7 @@ Routes other than login and signup require a signed-in Flask session cookie.
 | `POST` | `/api/bank/connect` | Exchange a new Link `public_token`, or refresh an existing bank with form `item_id` when update mode returns no token |
 | `GET` | `/api/categories` | List categories in display order |
 | `GET` | `/api/transactions` | List the user's transactions; sync from every linked bank first |
-| `POST` | `/api/transactions` | Create a manual transaction (`name`, `amount`, `date`, `entry_type`, optional `category_id`) |
+| `POST` | `/api/transactions` | Create a manual transaction (`name`, `amount`, `date`, `entry_type` of `expense` / `income` / `transfer` / `reimbursement`, optional `category_id`; required for reimbursements) |
 | `PATCH` | `/api/transactions/<plaid_transaction_id>` | Update `approved`, `category_id`, `name`, `date`, `entry_type`, and/or `amount` |
 | `DELETE` | `/api/transactions/<plaid_transaction_id>` | Soft-delete a transaction |
-| `POST` | `/api/chat` | Ask a spending question (`question`, optional `history`); answers from approved expenses only |
+| `POST` | `/api/chat` | Ask a spending question (`question`, optional `history`); answers from approved expenses net of reimbursements |
